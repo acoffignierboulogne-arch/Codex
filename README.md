@@ -33,6 +33,8 @@ Au lancement, l'application tente aussi d'ouvrir automatiquement le navigateur p
 Le lancement Flask est configuré avec `use_reloader=False` pour éviter l'erreur `SystemExit: 1` observée depuis Spyder avec `%runfile`.
 
 ## Format CSV attendu
+Le parsing gère les CSV français du type `Date;Dépenses` avec virgule décimale (ex: `1347528,18`) et noms de colonnes accentués.
+
 Par défaut, l'application prend les deux premières colonnes du CSV :
 1. date (exemple: `2024-01-01`)
 2. montant de dépense

@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import StringIO
 from itertools import product
 import threading
+import unicodedata
 import webbrowser
 
 import pandas as pd
@@ -17,12 +18,27 @@ MAX_GRID_COMBINATIONS = 250
 CSV_CACHE: dict[str, str] = {}
 
 
+def _normalize_label(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value).strip())
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return normalized.casefold()
+
+
 def _parse_csv(file_content: str) -> pd.DataFrame:
-    """Parse robuste pour CSV FR/EN (BOM, ;, ,)."""
-    try:
-        return pd.read_csv(StringIO(file_content), sep=None, engine="python")
-    except Exception:
-        return pd.read_csv(StringIO(file_content))
+    """Parse robuste pour CSV FR (;) et EN (,), avec décimales françaises."""
+    attempts = [
+        {"sep": ";", "decimal": ","},
+        {"sep": None, "engine": "python"},
+        {},
+    ]
+    for kwargs in attempts:
+        try:
+            df = pd.read_csv(StringIO(file_content), **kwargs)
+            if not df.empty and len(df.columns) >= 2:
+                return df
+        except Exception:
+            continue
+    return pd.read_csv(StringIO(file_content))
 
 
 def _prepare_dataframe(file_content: str, date_column: str | None, value_column: str | None) -> pd.Series:
@@ -38,14 +54,32 @@ def _prepare_dataframe(file_content: str, date_column: str | None, value_column:
         value_column = df.columns[1]
 
     if date_column not in df.columns or value_column not in df.columns:
-        raise ValueError("Colonnes date/valeur introuvables dans le CSV.")
+        # Tente une correspondance robuste (accents/majuscules/minuscules).
+        normalized_map = {_normalize_label(col): col for col in df.columns}
+        date_key = _normalize_label(date_column)
+        value_key = _normalize_label(value_column)
+        date_column = normalized_map.get(date_key, date_column)
+        value_column = normalized_map.get(value_key, value_column)
+
+    if date_column not in df.columns or value_column not in df.columns:
+        raise ValueError(f"Colonnes date/valeur introuvables dans le CSV. Colonnes détectées: {list(df.columns)}")
 
     data = df[[date_column, value_column]].copy()
     data.columns = ["date", "value"]
 
     data["date"] = pd.to_datetime(data["date"], errors="coerce")
-    value_as_str = data["value"].astype(str).str.replace(" ", "", regex=False)
-    value_as_str = value_as_str.str.replace(",", ".", regex=False)
+    value_as_str = data["value"].astype(str).str.replace(" ", "", regex=False).str.replace(" ", "", regex=False)
+
+    def _fr_to_float_text(v: str) -> str:
+        txt = str(v)
+        # Si virgule présente, on suppose format français: 1.234.567,89
+        if "," in txt:
+            txt = txt.replace(".", "")
+            txt = txt.replace(",", ".")
+        return txt
+
+    value_as_str = value_as_str.map(_fr_to_float_text)
+    value_as_str = value_as_str.str.replace(r"[^0-9+\-\.]", "", regex=True)
     data["value"] = pd.to_numeric(value_as_str, errors="coerce")
     data = data.dropna()
 
@@ -296,7 +330,10 @@ def index():
                 try:
                     file_content = raw_bytes.decode("utf-8-sig")
                 except UnicodeDecodeError:
-                    file_content = raw_bytes.decode("latin-1")
+                    try:
+                        file_content = raw_bytes.decode("cp1252")
+                    except UnicodeDecodeError:
+                        file_content = raw_bytes.decode("latin-1")
                 _set_cached_csv(client_id, file_content)
             elif cached_csv:
                 file_content = cached_csv
