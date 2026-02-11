@@ -3,18 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Prévisions financières SARIMA</title>
+    <title>Prévisions financières SARIMA / Holt-Winters</title>
     <style>
       body { font-family: Arial, sans-serif; margin: 24px; background: #f8fafc; }
       h1, h2, h3 { margin-top: 0; }
       .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 6px rgba(0,0,0,0.08); }
       .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
       label { display: block; font-size: 0.92rem; margin-bottom: 4px; }
-      input[type="number"], input[type="text"], input[type="month"], input[type="file"], input[type="range"] { width: 100%; padding: 7px; box-sizing: border-box; }
+      input[type="number"], input[type="text"], input[type="file"], input[type="range"] { width: 100%; padding: 7px; box-sizing: border-box; }
       button { border: none; background: #2563eb; color: white; border-radius: 6px; padding: 10px 14px; cursor: pointer; }
       .error { color: #b91c1c; background: #fee2e2; padding: 10px; border-radius: 6px; margin-bottom: 16px; }
       .warning { color: #92400e; background: #fef3c7; padding: 10px; border-radius: 6px; margin-bottom: 16px; }
-      .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+      .tabs { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
       .tab-btn { background: #e5e7eb; color: #111827; }
       .tab-btn.active { background: #1d4ed8; color: #fff; }
       .tab-panel { display: none; }
@@ -24,64 +24,47 @@
       th:first-child, td:first-child { text-align: left; }
       .small { color: #374151; font-size: 0.9rem; }
       .cutoff-box { background: #fff7ed; border: 1px solid #fdba74; border-radius: 8px; padding: 10px; }
+      .note { font-size: 0.9rem; line-height: 1.4; color: #374151; }
     </style>
   </head>
   <body>
-    <h1>SARIMA - Prévisions dépenses et budget</h1>
+    <h1>Prévisions dépenses - SARIMA & Holt-Winters</h1>
 
-    {% if error %}
-      <div class="error">{{ error }}</div>
-    {% endif %}
-    {% if warning %}
-      <div class="warning">{{ warning }}</div>
-    {% endif %}
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    {% if warning %}<div class="warning">{{ warning }}</div>{% endif %}
 
     <form method="post" enctype="multipart/form-data" class="card" id="main-form">
       <h2>Paramètres</h2>
-      <p class="small">Chargez un CSV une fois, puis ajustez les curseurs. Le fichier reste en mémoire pendant la session.</p>
-      {% if defaults.csv_cached == "1" %}<p class="small">✅ CSV actuellement chargé en mémoire.</p>{% endif %}
+      <p class="small">Le grid search optimise la MAPE cumulée de l'année N-1 par rapport au cutoff.</p>
+      {% if defaults.csv_cached == "1" %}<p class="small">✅ CSV chargé en mémoire</p>{% endif %}
 
       <div class="grid">
-        <div>
-          <label for="csv_file">CSV dépenses mensuelles</label>
-          <input id="csv_file" type="file" name="csv_file" accept=".csv" />
-        </div>
-        <div>
-          <label for="date_column">Colonne date (optionnel)</label>
-          <input id="date_column" type="text" name="date_column" value="{{ defaults.date_column }}" placeholder="ex: date" />
-        </div>
-        <div>
-          <label for="value_column">Colonne montant (optionnel)</label>
-          <input id="value_column" type="text" name="value_column" value="{{ defaults.value_column }}" placeholder="ex: depense" />
-        </div>
+        <div><label>CSV</label><input type="file" name="csv_file" accept=".csv" /></div>
+        <div><label>Colonne date</label><input type="text" name="date_column" value="{{ defaults.date_column }}" /></div>
+        <div><label>Colonne montant</label><input type="text" name="value_column" value="{{ defaults.value_column }}" /></div>
       </div>
 
       <div class="grid">
         <div>
-          <label for="forecast_periods">Horizon de prévision (mois)</label>
+          <label>Horizon (mois)</label>
           <input id="forecast_periods" type="range" min="1" max="24" name="forecast_periods" value="{{ defaults.forecast_periods }}" oninput="document.getElementById('forecast_periods_value').value=this.value; scheduleAutoRecalc()" />
           <input id="forecast_periods_value" type="number" min="1" max="24" value="{{ defaults.forecast_periods }}" oninput="document.getElementById('forecast_periods').value=this.value; this.form.forecast_periods.value=this.value" />
         </div>
-
         <div class="cutoff-box">
-          <label for="cutoff_index">✂️ Cutoff (sur curseur)</label>
+          <label>Cutoff</label>
           {% if cutoff_slider %}
             <input id="cutoff_index" type="range" name="cutoff_index" min="{{ cutoff_slider.min }}" max="{{ cutoff_slider.max }}" step="1" value="{{ cutoff_slider.value }}" oninput="updateCutoffLabel(this.value); scheduleAutoRecalc()" />
             <div class="small">Mois sélectionné: <strong id="cutoff_label">{{ cutoff_slider.selected }}</strong></div>
           {% else %}
-            <input id="cutoff_index" type="range" name="cutoff_index" min="0" max="0" step="1" value="0" disabled />
-            <div class="small">Chargez puis calculez une première fois pour activer le cutoff.</div>
+            <input type="range" min="0" max="0" value="0" disabled />
+            <div class="small">Chargez un fichier puis lancez un premier calcul.</div>
           {% endif %}
           <input type="hidden" name="cutoff_month" value="{{ defaults.cutoff_month }}" />
         </div>
-
-        <div>
-          <label for="s">Période saisonnière s</label>
-          <input id="s" type="number" min="2" name="s" value="{{ defaults.s }}" />
-        </div>
+        <div><label>Période saisonnière s</label><input type="number" min="2" name="s" value="{{ defaults.s }}" /></div>
       </div>
 
-      <h3>SARIMA manuel</h3>
+      <h3>Paramètres SARIMA</h3>
       <div class="grid">
         <div><label>p</label><input type="number" min="0" name="p" value="{{ defaults.p }}" /></div>
         <div><label>d</label><input type="number" min="0" name="d" value="{{ defaults.d }}" /></div>
@@ -91,14 +74,10 @@
         <div><label>Q</label><input type="number" min="0" name="Q" value="{{ defaults.Q }}" /></div>
       </div>
 
-      <h3>Grid search MAPE cumulée (année N-1 par rapport au cutoff)</h3>
+      <h3>Grid search</h3>
       <div class="grid">
-        <div>
-          <label><input type="checkbox" name="run_grid_search" {% if defaults.run_grid_search == 'on' %}checked{% endif %} /> Activer le grid search</label>
-        </div>
-        <div>
-          <label><input type="checkbox" name="grid_fast" {% if defaults.grid_fast == 'on' %}checked{% endif %} /> Mode rapide (grille allégée)</label>
-        </div>
+        <div><label><input type="checkbox" name="run_grid_search" {% if defaults.run_grid_search == 'on' %}checked{% endif %} /> Activer</label></div>
+        <div><label><input type="checkbox" name="grid_fast" {% if defaults.grid_fast == 'on' %}checked{% endif %} /> Mode rapide</label></div>
         <div><label>max p</label><input type="number" min="0" name="max_p" value="{{ defaults.max_p }}" /></div>
         <div><label>max d</label><input type="number" min="0" name="max_d" value="{{ defaults.max_d }}" /></div>
         <div><label>max q</label><input type="number" min="0" name="max_q" value="{{ defaults.max_q }}" /></div>
@@ -107,91 +86,103 @@
         <div><label>max Q</label><input type="number" min="0" name="max_Q" value="{{ defaults.max_Q }}" /></div>
       </div>
 
-      <p><button type="submit">Calculer prévisions et budget</button></p>
+      <p><button type="submit">Calculer</button></p>
     </form>
 
     {% if metrics %}
-      <div class="card">
-        <h2>Résumé modèle</h2>
-        <ul>
-          <li>Ordre sélectionné : <strong>{{ metrics.selected_order }}</strong></li>
-          <li>Ordre saisonnier : <strong>{{ metrics.selected_seasonal }}</strong></li>
-          {% if metrics.best_mape is not none %}
-            <li>MAPE cumulée rolling (année {{ metrics.target_year }}) : <strong>{{ metrics.best_mape }}%</strong></li>
-          {% endif %}
-          <li>Budget {{ metrics.budget_year }} projeté (réel+prévision) : <strong>{{ metrics.projected_total }}</strong></li>
-          <li>Budget {{ metrics.budget_year }} prédit (100% SARIMA) : <strong>{{ metrics.predicted_total }}</strong></li>
-          <li>Budget {{ metrics.budget_year }} réel observé (cutoff) : <strong>{{ metrics.actual_total }}</strong></li>
-        </ul>
-      </div>
+    <div class="card">
+      <h2>SARIMA - qualité de prévision</h2>
+      <ul>
+        <li>Année cible grid (N-1 du cutoff): <strong>{{ metrics.target_year }}</strong></li>
+        <li>MAPE cumulée rolling: <strong>{{ metrics.best_mape }}%</strong></li>
+        <li>MAPE annuelle cumul total (prévision annuelle / réel annuel): <strong>{{ metrics.best_annual_mape }}%</strong></li>
+        <li>Ordre: <strong>{{ metrics.selected_order }}</strong> ; Saisonnier: <strong>{{ metrics.selected_seasonal }}</strong></li>
+        <li>Budget projeté: <strong>{{ metrics.projected_total }}</strong> ; Prédit 100%: <strong>{{ metrics.predicted_total }}</strong> ; Réel observé: <strong>{{ metrics.actual_total }}</strong></li>
+      </ul>
+      <p class="note">Interprétation SARIMA: p/q plus élevés = plus de sensibilité aux dynamiques court terme; d/D plus élevés = plus de différenciation (tendance/saisonnalité plus fortement neutralisées). Trop haut peut sur-ajuster.</p>
+    </div>
+    {% endif %}
+
+    {% if hw_metrics %}
+    <div class="card">
+      <h2>Holt-Winters - qualité de prévision</h2>
+      <ul>
+        <li>Année cible grid: <strong>{{ hw_metrics.target_year }}</strong></li>
+        <li>Type saisonnier: <strong>{{ hw_metrics.type }}</strong></li>
+        <li>Alpha/Beta/Gamma: <strong>{{ hw_metrics.alpha }} / {{ hw_metrics.beta }} / {{ hw_metrics.gamma }}</strong></li>
+        <li>MAPE cumulée rolling: <strong>{{ hw_metrics.best_mape }}%</strong></li>
+        <li>MAPE annuelle cumul total: <strong>{{ hw_metrics.best_annual_mape }}%</strong></li>
+      </ul>
+      <p class="note">Interprétation HW: alpha ↑ = plus réactif au niveau; beta ↑ = tendance plus sensible; gamma ↑ = saisonnalité plus réactive. Additif si saisonnalité stable en valeur absolue, multiplicatif si l'amplitude suit le niveau.</p>
+    </div>
     {% endif %}
 
     {% if top_models %}
-      <div class="card">
-        <h2>Top modèles (grid search)</h2>
+    <div class="card">
+      <h2>Top modèles SARIMA</h2>
+      <table>
+        <thead><tr><th>Rang</th><th>Order</th><th>Seasonal</th><th>MAPE rolling</th><th>MAPE annuelle</th></tr></thead>
+        <tbody>
+          {% for m in top_models %}<tr><td>{{ m.rank }}</td><td>{{ m.order }}</td><td>{{ m.seasonal }}</td><td>{{ m.mape }}%</td><td>{{ m.annual_mape }}%</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if hw_top_models %}
+    <div class="card">
+      <h2>Top modèles Holt-Winters</h2>
+      <table>
+        <thead><tr><th>Rang</th><th>Type</th><th>Alpha</th><th>Beta</th><th>Gamma</th><th>MAPE rolling</th><th>MAPE annuelle</th></tr></thead>
+        <tbody>
+          {% for m in hw_top_models %}<tr><td>{{ m.rank }}</td><td>{{ m.type }}</td><td>{{ m.alpha }}</td><td>{{ m.beta }}</td><td>{{ m.gamma }}</td><td>{{ m.mape }}%</td><td>{{ m.annual_mape }}%</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if forecast_graph_html or budget_graph_html or decomposition_graph_html or hw_graph_html %}
+    <div class="card">
+      <div class="tabs">
+        <button type="button" class="tab-btn active" data-tab="tab-forecast">Prévision SARIMA</button>
+        <button type="button" class="tab-btn" data-tab="tab-budget">Budget</button>
+        <button type="button" class="tab-btn" data-tab="tab-decomposition">Décomposition</button>
+        <button type="button" class="tab-btn" data-tab="tab-hw">Holt-Winters</button>
+      </div>
+
+      <section id="tab-forecast" class="tab-panel active">{{ forecast_graph_html|safe }}</section>
+
+      <section id="tab-budget" class="tab-panel">
+        {{ budget_graph_html|safe }}
+        {% if budget_table %}
         <table>
-          <thead><tr><th>Rang</th><th>Order</th><th>Seasonal</th><th>MAPE (%)</th></tr></thead>
+          <thead><tr><th>Mois</th><th>Réel</th><th>Prédit</th><th>Projeté</th><th>Cumul réel</th><th>Cumul prédit</th><th>Cumul projeté</th></tr></thead>
           <tbody>
-            {% for model in top_models %}
-              <tr>
-                <td>{{ model.rank }}</td>
-                <td>{{ model.order }}</td>
-                <td>{{ model.seasonal }}</td>
-                <td>{{ model.mape }}</td>
-              </tr>
+            {% for row in budget_table %}
+              <tr><td>{{ row['Mois'] }}</td><td>{{ row['Réel'] }}</td><td>{{ row['Prédit'] }}</td><td>{{ row['Projeté'] }}</td><td>{{ row['Cumul réel'] }}</td><td>{{ row['Cumul prédit'] }}</td><td>{{ row['Cumul projeté'] }}</td></tr>
             {% endfor %}
           </tbody>
         </table>
-      </div>
-    {% endif %}
+        {% endif %}
+      </section>
 
-    {% if forecast_graph_html or budget_graph_html %}
-      <div class="card">
-        <div class="tabs">
-          <button type="button" class="tab-btn active" data-tab="tab-forecast">Prévision</button>
-          <button type="button" class="tab-btn" data-tab="tab-budget">Budget</button>
-          <button type="button" class="tab-btn" data-tab="tab-decomposition">Décomposition</button>
-        </div>
+      <section id="tab-decomposition" class="tab-panel">
+        {% if decomposition_graph_html %}
+          {{ decomposition_graph_html|safe }}
+          <p class="note">Décomposition: la tendance montre la direction de fond, la saisonnalité montre le motif périodique, les résidus montrent ce que le modèle n’explique pas.</p>
+        {% else %}
+          <p class="small">Décomposition indisponible (historique insuffisant pour la périodicité choisie).</p>
+        {% endif %}
+      </section>
 
-        <section id="tab-forecast" class="tab-panel active">
-          {{ forecast_graph_html|safe }}
-        </section>
-
-        <section id="tab-budget" class="tab-panel">
-          {{ budget_graph_html|safe }}
-          {% if budget_table %}
-            <table>
-              <thead>
-                <tr>
-                  <th>Mois</th><th>Réel</th><th>Prédit</th><th>Projeté</th><th>Cumul réel</th><th>Cumul prédit</th><th>Cumul projeté</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for row in budget_table %}
-                  <tr>
-                    <td>{{ row['Mois'] }}</td>
-                    <td>{{ row['Réel'] }}</td>
-                    <td>{{ row['Prédit'] }}</td>
-                    <td>{{ row['Projeté'] }}</td>
-                    <td>{{ row['Cumul réel'] }}</td>
-                    <td>{{ row['Cumul prédit'] }}</td>
-                    <td>{{ row['Cumul projeté'] }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          {% endif %}
-        </section>
-
-
-        <section id="tab-decomposition" class="tab-panel">
-          {% if decomposition_graph_html %}
-            {{ decomposition_graph_html|safe }}
-          {% else %}
-            <p class="small">Décomposition indisponible (historique insuffisant pour la périodicité choisie).</p>
-          {% endif %}
-        </section>
-      </div>
+      <section id="tab-hw" class="tab-panel">
+        {% if hw_graph_html %}
+          {{ hw_graph_html|safe }}
+        {% else %}
+          <p class="small">Aucun résultat Holt-Winters disponible.</p>
+        {% endif %}
+      </section>
+    </div>
     {% endif %}
 
     <script>
@@ -206,7 +197,6 @@
         });
       });
 
-
       let autoRecalcTimer = null;
       function scheduleAutoRecalc() {
         const form = document.getElementById('main-form');
@@ -214,13 +204,12 @@
         if (autoRecalcTimer) clearTimeout(autoRecalcTimer);
         autoRecalcTimer = setTimeout(() => form.requestSubmit(), 250);
       }
+
       const cutoffLabels = {{ cutoff_slider.labels | tojson if cutoff_slider else '[]' }};
       function updateCutoffLabel(indexValue) {
         const idx = parseInt(indexValue, 10);
         const labelEl = document.getElementById('cutoff_label');
-        if (labelEl && cutoffLabels[idx]) {
-          labelEl.textContent = cutoffLabels[idx];
-        }
+        if (labelEl && cutoffLabels[idx]) labelEl.textContent = cutoffLabels[idx];
       }
     </script>
   </body>
