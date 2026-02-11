@@ -18,6 +18,12 @@ MAX_GRID_COMBINATIONS = 250
 CSV_CACHE: dict[str, str] = {}
 
 
+def _format_fr(value: float | int | None, decimals: int = 2) -> str:
+    if value is None:
+        return "—"
+    return f"{value:,.{decimals}f}".replace(",", " ").replace(".", ",")
+
+
 def _normalize_label(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", str(value).strip())
     normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
@@ -25,7 +31,6 @@ def _normalize_label(value: str) -> str:
 
 
 def _parse_csv(file_content: str) -> pd.DataFrame:
-    """Parse robuste pour CSV FR (;) et EN (,), avec décimales françaises."""
     attempts = [
         {"sep": ";", "decimal": ","},
         {"sep": None, "engine": "python"},
@@ -43,7 +48,6 @@ def _parse_csv(file_content: str) -> pd.DataFrame:
 
 def _prepare_dataframe(file_content: str, date_column: str | None, value_column: str | None) -> pd.Series:
     df = _parse_csv(file_content)
-
     if df.empty:
         raise ValueError("Le fichier CSV est vide.")
 
@@ -54,25 +58,21 @@ def _prepare_dataframe(file_content: str, date_column: str | None, value_column:
         value_column = df.columns[1]
 
     if date_column not in df.columns or value_column not in df.columns:
-        # Tente une correspondance robuste (accents/majuscules/minuscules).
         normalized_map = {_normalize_label(col): col for col in df.columns}
-        date_key = _normalize_label(date_column)
-        value_key = _normalize_label(value_column)
-        date_column = normalized_map.get(date_key, date_column)
-        value_column = normalized_map.get(value_key, value_column)
+        date_column = normalized_map.get(_normalize_label(date_column), date_column)
+        value_column = normalized_map.get(_normalize_label(value_column), value_column)
 
     if date_column not in df.columns or value_column not in df.columns:
-        raise ValueError(f"Colonnes date/valeur introuvables dans le CSV. Colonnes détectées: {list(df.columns)}")
+        raise ValueError(f"Colonnes date/valeur introuvables. Colonnes détectées: {list(df.columns)}")
 
     data = df[[date_column, value_column]].copy()
     data.columns = ["date", "value"]
 
     data["date"] = pd.to_datetime(data["date"], errors="coerce")
-    value_as_str = data["value"].astype(str).str.replace(" ", "", regex=False).str.replace(" ", "", regex=False)
+    value_as_str = data["value"].astype(str).str.replace("\u00a0", "", regex=False).str.replace(" ", "", regex=False)
 
     def _fr_to_float_text(v: str) -> str:
         txt = str(v)
-        # Si virgule présente, on suppose format français: 1.234.567,89
         if "," in txt:
             txt = txt.replace(".", "")
             txt = txt.replace(",", ".")
@@ -84,98 +84,84 @@ def _prepare_dataframe(file_content: str, date_column: str | None, value_column:
     data = data.dropna()
 
     if data.empty:
-        raise ValueError("Aucune donnée exploitable après nettoyage (dates/valeurs invalides).")
+        raise ValueError("Aucune donnée exploitable après nettoyage.")
 
-    data = data.sort_values("date").set_index("date")
-    monthly = data["value"].resample("MS").sum()
-
+    monthly = data.sort_values("date").set_index("date")["value"].resample("MS").sum()
     if len(monthly) < 24:
-        raise ValueError("Il faut au moins 24 mois de données pour une prévision SARIMA fiable.")
+        raise ValueError("Il faut au moins 24 mois de données pour SARIMA.")
 
     return monthly
 
 
 def _apply_cutoff_index(series: pd.Series, cutoff_index: str | None) -> tuple[pd.Series, pd.Timestamp, int]:
-    if cutoff_index is None or cutoff_index == "":
-        idx = len(series) - 1
-    else:
-        idx = int(cutoff_index)
-
+    idx = len(series) - 1 if not cutoff_index else int(cutoff_index)
     idx = max(0, min(idx, len(series) - 1))
-    cutoff = series.index[idx]
-    filtered = series.iloc[: idx + 1]
-
-    if filtered.empty:
-        raise ValueError("Aucune donnée <= cutoff. Ajustez le curseur.")
-
-    return filtered, cutoff, idx
+    return series.iloc[: idx + 1], series.index[idx], idx
 
 
 def _sarima_forecast(series: pd.Series, periods: int, order: tuple[int, int, int], seasonal_order: tuple[int, int, int, int]):
-    model = SARIMAX(
-        series,
-        order=order,
-        seasonal_order=seasonal_order,
-        enforce_stationarity=False,
-        enforce_invertibility=False,
-    )
+    model = SARIMAX(series, order=order, seasonal_order=seasonal_order, enforce_stationarity=False, enforce_invertibility=False)
     fit = model.fit(disp=False)
-
     forecast_obj = fit.get_forecast(steps=periods)
     forecast = forecast_obj.predicted_mean
     conf = forecast_obj.conf_int()
-
     if conf.shape[1] < 2:
         raise ValueError("Intervalle de confiance inattendu (conf_int).")
-
     return fit, forecast, conf
 
 
-def _last_complete_calendar_year(series: pd.Series) -> int:
+def _resolve_target_year(series: pd.Series, cutoff_year: int) -> int:
     counts = series.groupby(series.index.year).size()
-    full_years = counts[counts == 12]
-    if full_years.empty:
-        raise ValueError("Aucune année civile complète (12 mois) trouvée pour le scoring MAPE.")
-    return int(full_years.index.max())
+    full_years = sorted(int(y) for y, c in counts.items() if c == 12 and int(y) <= cutoff_year - 1)
+    if not full_years:
+        raise ValueError("Aucune année civile complète disponible avant le cutoff pour le grid search.")
+    return full_years[-1]
 
 
 def _rolling_cumulative_mape(full_series: pd.Series, target_year: int, order: tuple[int, int, int], seasonal_order: tuple[int, int, int, int]) -> float:
     year_data = full_series[full_series.index.year == target_year]
-    if len(year_data) != 12:
-        raise ValueError("L'année cible doit contenir 12 mois réels.")
-
     actual_total = float(year_data.sum())
-    if actual_total == 0:
-        raise ValueError("Le total annuel réel est nul, la MAPE n'est pas définie.")
+    if len(year_data) != 12 or actual_total == 0:
+        raise ValueError("Année cible invalide pour la MAPE.")
 
     apes: list[float] = []
     for month_dt in sorted(year_data.index):
         train = full_series[full_series.index < month_dt]
         if len(train) < 24:
             continue
-
         remaining = 12 - month_dt.month
         _, fc, _ = _sarima_forecast(train, max(remaining, 1), order, seasonal_order)
-
         observed_ytd = float(year_data[year_data.index <= month_dt].sum())
-        predicted_rest = float(fc.iloc[:remaining].sum()) if remaining > 0 else 0.0
-        projected_total = observed_ytd + predicted_rest
-
-        ape = abs(projected_total - actual_total) / abs(actual_total) * 100
-        apes.append(ape)
+        projected_total = observed_ytd + (float(fc.iloc[:remaining].sum()) if remaining > 0 else 0.0)
+        apes.append(abs(projected_total - actual_total) / abs(actual_total) * 100)
 
     if not apes:
-        raise ValueError("Pas assez d'historique pour calculer la MAPE cumulée rolling.")
-
+        raise ValueError("Pas assez d'historique pour calculer la MAPE cumulée.")
     return float(sum(apes) / len(apes))
 
 
-def _grid_search(series: pd.Series, seasonal_period: int, max_p: int, max_d: int, max_q: int, max_P: int, max_D: int, max_Q: int):
-    target_year = _last_complete_calendar_year(series)
+def _grid_values(max_value: int, fast_mode: bool) -> list[int]:
+    if max_value <= 0:
+        return [0]
+    if not fast_mode:
+        return list(range(max_value + 1))
+    vals = {0, max_value}
+    if max_value >= 2:
+        vals.add(max_value // 2)
+    return sorted(vals)
 
-    combos = list(product(range(max_p + 1), range(max_d + 1), range(max_q + 1), range(max_P + 1), range(max_D + 1), range(max_Q + 1)))
+
+def _grid_search(series: pd.Series, target_year: int, seasonal_period: int, max_p: int, max_d: int, max_q: int, max_P: int, max_D: int, max_Q: int, fast_mode: bool):
+    p_vals = _grid_values(max_p, fast_mode)
+    d_vals = _grid_values(max_d, fast_mode)
+    q_vals = _grid_values(max_q, fast_mode)
+    P_vals = _grid_values(max_P, fast_mode)
+    D_vals = _grid_values(max_D, fast_mode)
+    Q_vals = _grid_values(max_Q, fast_mode)
+
+    combos = list(product(p_vals, d_vals, q_vals, P_vals, D_vals, Q_vals))
     if len(combos) > MAX_GRID_COMBINATIONS:
-        raise ValueError(f"Trop de combinaisons ({len(combos)}). Réduisez les bornes (max {MAX_GRID_COMBINATIONS}).")
+        raise ValueError(f"Trop de combinaisons ({len(combos)}). Réduisez les bornes.")
 
     results: list[dict] = []
     for p, d, q, P, D, Q in combos:
@@ -187,82 +173,61 @@ def _grid_search(series: pd.Series, seasonal_period: int, max_p: int, max_d: int
         except Exception:
             continue
 
-    results.sort(
-        key=lambda item: (
-            item["mape"],
-            sum(item["order"]) + sum(item["seasonal"][:3]),
-            item["order"],
-            item["seasonal"],
-        )
-    )
-    return target_year, results, len(combos)
+    results.sort(key=lambda item: (item["mape"], sum(item["order"]) + sum(item["seasonal"][:3]), item["order"], item["seasonal"]))
+    return results, len(combos)
 
 
-def _build_forecast_figure(history: pd.Series, forecast: pd.Series, conf_int: pd.DataFrame, cutoff: pd.Timestamp) -> str:
+def _build_forecast_figure(history: pd.Series, forecast: pd.Series, conf_int: pd.DataFrame, fitted: pd.Series, cutoff: pd.Timestamp) -> str:
     fig = go.Figure()
-
-    fig.add_trace(go.Scatter(x=history.index, y=history.values, mode="lines+markers", name="Historique (jusqu'au cutoff)"))
-    fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode="lines+markers", name="Prévision", line=dict(dash="dash")))
+    fig.add_trace(go.Scatter(x=history.index, y=history.values, mode="lines+markers", name="Réel"))
+    fig.add_trace(go.Scatter(x=fitted.index, y=fitted.values, mode="lines", name="Ajusté (in-sample)", line=dict(color="#16a34a")))
+    fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode="lines+markers", name="Prévision (horizon)", line=dict(dash="dash")))
 
     lower_col = conf_int.columns[0]
     upper_col = conf_int.columns[1]
     fig.add_trace(go.Scatter(x=forecast.index, y=conf_int[upper_col], mode="lines", line=dict(width=0), showlegend=False))
-    fig.add_trace(
-        go.Scatter(
-            x=forecast.index,
-            y=conf_int[lower_col],
-            mode="lines",
-            line=dict(width=0),
-            fill="tonexty",
-            fillcolor="rgba(99, 110, 250, 0.2)",
-            name="Intervalle de confiance",
-        )
-    )
+    fig.add_trace(go.Scatter(x=forecast.index, y=conf_int[lower_col], mode="lines", line=dict(width=0), fill="tonexty", fillcolor="rgba(99,110,250,0.2)", name="Intervalle"))
 
     fig.add_vline(x=cutoff, line_width=2, line_dash="dot", line_color="#f97316")
-    fig.update_layout(
-        title="Prévision des dépenses mensuelles (SARIMA)",
-        xaxis_title="Date",
-        yaxis_title="Montant",
-        template="plotly_white",
-        xaxis=dict(rangeslider=dict(visible=True)),
-    )
+    fig.update_layout(title="Prévision SARIMA", xaxis_title="Date", yaxis_title="Montant", template="plotly_white", xaxis=dict(rangeslider=dict(visible=True)))
     return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
 
-def _build_budget_projection(history: pd.Series, forecast: pd.Series, year: int) -> tuple[pd.DataFrame, float, float]:
+def _build_budget_projection(history: pd.Series, forecast: pd.Series, year: int) -> tuple[pd.DataFrame, float, float, float]:
     labels = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Aoû", "Sep", "Oct", "Nov", "Déc"]
     real_year = history[history.index.year == year]
     real_by_month = real_year.groupby(real_year.index.month).sum().to_dict()
     fc_year = forecast[forecast.index.year == year]
     fc_by_month = fc_year.groupby(fc_year.index.month).sum().to_dict()
 
-    cumul_real = 0.0
-    cumul_projected = 0.0
+    cumul_real = cumul_projected = cumul_predicted = 0.0
     rows = []
-
     for month in range(1, 13):
         real_val = float(real_by_month.get(month, 0.0))
-        projected_val = real_val if real_val != 0 else float(fc_by_month.get(month, 0.0))
+        pure_pred = float(fc_by_month.get(month, 0.0))
+        projected_val = real_val if real_val != 0 else pure_pred
+
         cumul_real += real_val
         cumul_projected += projected_val
+        cumul_predicted += pure_pred
 
-        rows.append(
-            {
-                "Mois": labels[month - 1],
-                "Réel": round(real_val, 2),
-                "Projeté": round(projected_val, 2),
-                "Cumul réel": round(cumul_real, 2),
-                "Cumul projeté": round(cumul_projected, 2),
-            }
-        )
+        rows.append({
+            "Mois": labels[month - 1],
+            "Réel": real_val,
+            "Prédit": pure_pred,
+            "Projeté": projected_val,
+            "Cumul réel": cumul_real,
+            "Cumul prédit": cumul_predicted,
+            "Cumul projeté": cumul_projected,
+        })
 
-    return pd.DataFrame(rows), round(cumul_projected, 2), round(cumul_real, 2)
+    return pd.DataFrame(rows), round(cumul_projected, 2), round(cumul_real, 2), round(cumul_predicted, 2)
 
 
 def _build_budget_figure(yearly_df: pd.DataFrame, year: int) -> str:
     fig = go.Figure()
     fig.add_trace(go.Bar(x=yearly_df["Mois"], y=yearly_df["Cumul réel"], name="Cumul réel"))
+    fig.add_trace(go.Scatter(x=yearly_df["Mois"], y=yearly_df["Cumul prédit"], mode="lines+markers", name="Cumul prédit"))
     fig.add_trace(go.Scatter(x=yearly_df["Mois"], y=yearly_df["Cumul projeté"], mode="lines+markers", name="Cumul projeté"))
     fig.update_layout(title=f"Budget annuel projeté - {year}", xaxis_title="Mois", yaxis_title="Montant cumulé", template="plotly_white")
     return fig.to_html(full_html=False, include_plotlyjs=False)
@@ -286,35 +251,17 @@ def _set_cached_csv(client_id: str, content: str) -> None:
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    forecast_graph_html = None
-    budget_graph_html = None
-    budget_table = None
-    top_models = None
-    metrics = None
-    error = None
-    warning = None
+    forecast_graph_html = budget_graph_html = None
+    budget_table = top_models = metrics = None
+    error = warning = None
 
     defaults = {
         "forecast_periods": "6",
         "cutoff_index": "",
         "cutoff_month": "",
-        "p": "1",
-        "d": "1",
-        "q": "1",
-        "P": "1",
-        "D": "1",
-        "Q": "1",
-        "s": "12",
-        "max_p": "2",
-        "max_d": "1",
-        "max_q": "2",
-        "max_P": "1",
-        "max_D": "1",
-        "max_Q": "1",
-        "date_column": "",
-        "value_column": "",
-        "run_grid_search": "on",
-        "csv_cached": "",
+        "p": "1", "d": "1", "q": "1", "P": "1", "D": "1", "Q": "1", "s": "12",
+        "max_p": "2", "max_d": "1", "max_q": "2", "max_P": "1", "max_D": "1", "max_Q": "1",
+        "date_column": "", "value_column": "", "run_grid_search": "on", "grid_fast": "on", "csv_cached": "",
     }
     cutoff_slider = None
 
@@ -338,16 +285,15 @@ def index():
             elif cached_csv:
                 file_content = cached_csv
             else:
-                raise ValueError("Veuillez importer un fichier CSV au moins une fois (ensuite il sera conservé en mémoire).")
+                raise ValueError("Veuillez importer un fichier CSV au moins une fois.")
 
             series = _prepare_dataframe(file_content, form_data["date_column"] or None, form_data["value_column"] or None)
             history, cutoff, cutoff_idx = _apply_cutoff_index(series, form_data["cutoff_index"])
-            cutoff_labels = [dt.strftime("%Y-%m") for dt in series.index]
             cutoff_slider = {
                 "min": 0,
                 "max": len(series) - 1,
                 "value": cutoff_idx,
-                "labels": cutoff_labels,
+                "labels": [dt.strftime("%Y-%m") for dt in series.index],
                 "selected": cutoff.strftime("%Y-%m"),
             }
 
@@ -355,11 +301,15 @@ def index():
             order = (int(form_data["p"]), int(form_data["d"]), int(form_data["q"]))
             seasonal_period = max(2, int(form_data["s"]))
             seasonal = (int(form_data["P"]), int(form_data["D"]), int(form_data["Q"]), seasonal_period)
+
             run_grid = request.form.get("run_grid_search") == "on"
+            fast_mode = request.form.get("grid_fast") == "on"
 
             if run_grid:
-                target_year, gs_results, tested = _grid_search(
+                target_year = _resolve_target_year(history, cutoff.year)
+                gs_results, tested = _grid_search(
                     history,
+                    target_year,
                     seasonal_period,
                     int(form_data["max_p"]),
                     int(form_data["max_d"]),
@@ -367,44 +317,45 @@ def index():
                     int(form_data["max_P"]),
                     int(form_data["max_D"]),
                     int(form_data["max_Q"]),
+                    fast_mode,
                 )
                 if gs_results:
                     best = gs_results[0]
-                    order = best["order"]
-                    seasonal = best["seasonal"]
+                    order, seasonal = best["order"], best["seasonal"]
                     top_models = [
                         {
                             "rank": i + 1,
                             "order": str(item["order"]),
                             "seasonal": str(item["seasonal"]),
-                            "mape": round(item["mape"], 3),
+                            "mape": _format_fr(item["mape"], 3),
                         }
                         for i, item in enumerate(gs_results[:10])
                     ]
                     metrics = {
                         "target_year": target_year,
-                        "best_mape": round(best["mape"], 3),
+                        "best_mape": _format_fr(best["mape"], 3),
                         "selected_order": str(order),
                         "selected_seasonal": str(seasonal),
                     }
                 else:
-                    warning = (
-                        f"Grid search: aucun modèle n'a convergé sur {tested} combinaisons. "
-                        "On conserve les paramètres manuels saisis (essayez de réduire les bornes max)."
-                    )
+                    warning = f"Grid search: aucun modèle n'a convergé sur {tested} combinaisons. Paramètres manuels conservés."
 
             months_to_year_end = max(0, 12 - cutoff.month)
             needed_steps = max(periods, months_to_year_end)
 
-            _, forecast, conf_int = _sarima_forecast(history, needed_steps, order, seasonal)
+            fit, forecast, conf_int = _sarima_forecast(history, needed_steps, order, seasonal)
             shown_forecast = forecast.iloc[:periods]
             shown_conf = conf_int.iloc[:periods]
-            forecast_graph_html = _build_forecast_figure(history, shown_forecast, shown_conf, cutoff)
+            fitted = fit.fittedvalues.reindex(history.index)
+            forecast_graph_html = _build_forecast_figure(history, shown_forecast, shown_conf, fitted, cutoff)
 
             budget_year = cutoff.year
-            budget_df, projected_total, actual_total = _build_budget_projection(history, forecast, budget_year)
+            budget_df, projected_total, actual_total, predicted_total = _build_budget_projection(history, forecast, budget_year)
             budget_graph_html = _build_budget_figure(budget_df, budget_year)
-            budget_table = budget_df.to_dict(orient="records")
+
+            budget_table = []
+            for row in budget_df.to_dict(orient="records"):
+                budget_table.append({k: (_format_fr(v, 2) if isinstance(v, (int, float)) else v) for k, v in row.items()})
 
             if metrics is None:
                 metrics = {
@@ -414,13 +365,21 @@ def index():
                     "selected_seasonal": str(seasonal),
                 }
 
-            metrics.update({"budget_year": budget_year, "projected_total": projected_total, "actual_total": actual_total})
+            metrics.update(
+                {
+                    "budget_year": budget_year,
+                    "projected_total": _format_fr(projected_total, 2),
+                    "actual_total": _format_fr(actual_total, 2),
+                    "predicted_total": _format_fr(predicted_total, 2),
+                }
+            )
 
             form_data["csv_cached"] = "1"
             form_data["cutoff_index"] = str(cutoff_idx)
             form_data["cutoff_month"] = cutoff.strftime("%Y-%m")
             defaults.update(form_data)
             defaults["run_grid_search"] = "on" if run_grid else ""
+            defaults["grid_fast"] = "on" if fast_mode else ""
         except Exception as exc:  # noqa: BLE001
             error = str(exc)
             defaults.update(form_data)
@@ -445,7 +404,6 @@ def index():
 
 
 if __name__ == "__main__":
-    # Spyder/%runfile: éviter SystemExit lié au watchdog du reloader.
     url = "http://127.0.0.1:5000"
 
     def _open_browser() -> None:

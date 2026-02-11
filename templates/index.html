@@ -91,10 +91,13 @@
         <div><label>Q</label><input type="number" min="0" name="Q" value="{{ defaults.Q }}" /></div>
       </div>
 
-      <h3>Grid search MAPE cumulée (dernière année civile complète)</h3>
+      <h3>Grid search MAPE cumulée (année N-1 par rapport au cutoff)</h3>
       <div class="grid">
         <div>
           <label><input type="checkbox" name="run_grid_search" {% if defaults.run_grid_search == 'on' %}checked{% endif %} /> Activer le grid search</label>
+        </div>
+        <div>
+          <label><input type="checkbox" name="grid_fast" {% if defaults.grid_fast == 'on' %}checked{% endif %} /> Mode rapide (grille allégée)</label>
         </div>
         <div><label>max p</label><input type="number" min="0" name="max_p" value="{{ defaults.max_p }}" /></div>
         <div><label>max d</label><input type="number" min="0" name="max_d" value="{{ defaults.max_d }}" /></div>
@@ -116,7 +119,8 @@
           {% if metrics.best_mape is not none %}
             <li>MAPE cumulée rolling (année {{ metrics.target_year }}) : <strong>{{ metrics.best_mape }}%</strong></li>
           {% endif %}
-          <li>Budget {{ metrics.budget_year }} projeté : <strong>{{ metrics.projected_total }}</strong></li>
+          <li>Budget {{ metrics.budget_year }} projeté (réel+prévision) : <strong>{{ metrics.projected_total }}</strong></li>
+          <li>Budget {{ metrics.budget_year }} prédit (100% SARIMA) : <strong>{{ metrics.predicted_total }}</strong></li>
           <li>Budget {{ metrics.budget_year }} réel observé (cutoff) : <strong>{{ metrics.actual_total }}</strong></li>
         </ul>
       </div>
@@ -158,7 +162,7 @@
             <table>
               <thead>
                 <tr>
-                  <th>Mois</th><th>Réel</th><th>Projeté</th><th>Cumul réel</th><th>Cumul projeté</th>
+                  <th>Mois</th><th>Réel</th><th>Prédit</th><th>Projeté</th><th>Cumul réel</th><th>Cumul prédit</th><th>Cumul projeté</th>
                 </tr>
               </thead>
               <tbody>
@@ -166,8 +170,10 @@
                   <tr>
                     <td>{{ row['Mois'] }}</td>
                     <td>{{ row['Réel'] }}</td>
+                    <td>{{ row['Prédit'] }}</td>
                     <td>{{ row['Projeté'] }}</td>
                     <td>{{ row['Cumul réel'] }}</td>
+                    <td>{{ row['Cumul prédit'] }}</td>
                     <td>{{ row['Cumul projeté'] }}</td>
                   </tr>
                 {% endfor %}
