@@ -5,8 +5,8 @@ Cette application Python (Flask + HTML) permet de tester la robustesse d'un mod�
 ## Fonctionnalités
 - Import d'un CSV de dépenses mensuelles (gestion BOM, séparateurs `;`/`,` et encodage UTF-8/latin-1).
 - Le CSV est conservé en mémoire côté serveur pendant la session, pour éviter le réupload à chaque ajustement.
-- Réglage de l'horizon via un curseur (1 à 24 mois).
-- Cutoff via curseur (pas de saisie manuelle) pour simuler l'état du modèle à une date donnée.
+- Réglage de l'horizon via un curseur (1 à 24 mois) avec recalcul automatique.
+- Cutoff via curseur (pas de saisie manuelle) pour simuler l'état du modèle à une date donnée, avec recalcul automatique à chaque mouvement.
 - Grid search SARIMA (activé par défaut) pour minimiser la MAPE cumulée rolling de la dernière année civile complète.
 - Onglet **Prévision** (historique + projection + intervalle de confiance).
 - Onglet **Budget** (cumul réel / cumulé projeté sur l'année du cutoff).
@@ -26,6 +26,8 @@ pip install -r requirements.txt
 python app.py
 ```
 Puis ouvrir : [http://127.0.0.1:5000](http://127.0.0.1:5000)
+
+Au lancement, l'application tente aussi d'ouvrir automatiquement le navigateur par défaut (pratique sous Spyder).
 
 ## Note Spyder (SystemExit watchdog)
 Le lancement Flask est configuré avec `use_reloader=False` pour éviter l'erreur `SystemExit: 1` observée depuis Spyder avec `%runfile`.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from io import StringIO
 from itertools import product
+import threading
+import webbrowser
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -151,7 +153,14 @@ def _grid_search(series: pd.Series, seasonal_period: int, max_p: int, max_d: int
         except Exception:
             continue
 
-    results.sort(key=lambda item: item["mape"])
+    results.sort(
+        key=lambda item: (
+            item["mape"],
+            sum(item["order"]) + sum(item["seasonal"][:3]),
+            item["order"],
+            item["seasonal"],
+        )
+    )
     return target_year, results, len(combos)
 
 
@@ -344,7 +353,7 @@ def index():
                 else:
                     warning = (
                         f"Grid search: aucun modèle n'a convergé sur {tested} combinaisons. "
-                        "On conserve les paramètres manuels saisis."
+                        "On conserve les paramètres manuels saisis (essayez de réduire les bornes max)."
                     )
 
             months_to_year_end = max(0, 12 - cutoff.month)
@@ -400,4 +409,13 @@ def index():
 
 if __name__ == "__main__":
     # Spyder/%runfile: éviter SystemExit lié au watchdog du reloader.
+    url = "http://127.0.0.1:5000"
+
+    def _open_browser() -> None:
+        try:
+            webbrowser.open_new(url)
+        except Exception:
+            pass
+
+    threading.Timer(0.8, _open_browser).start()
     app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False, threaded=True)

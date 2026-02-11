@@ -59,14 +59,14 @@
       <div class="grid">
         <div>
           <label for="forecast_periods">Horizon de prévision (mois)</label>
-          <input id="forecast_periods" type="range" min="1" max="24" name="forecast_periods" value="{{ defaults.forecast_periods }}" oninput="document.getElementById('forecast_periods_value').value=this.value" />
+          <input id="forecast_periods" type="range" min="1" max="24" name="forecast_periods" value="{{ defaults.forecast_periods }}" oninput="document.getElementById('forecast_periods_value').value=this.value; scheduleAutoRecalc()" />
           <input id="forecast_periods_value" type="number" min="1" max="24" value="{{ defaults.forecast_periods }}" oninput="document.getElementById('forecast_periods').value=this.value; this.form.forecast_periods.value=this.value" />
         </div>
 
         <div class="cutoff-box">
           <label for="cutoff_index">✂️ Cutoff (sur curseur)</label>
           {% if cutoff_slider %}
-            <input id="cutoff_index" type="range" name="cutoff_index" min="{{ cutoff_slider.min }}" max="{{ cutoff_slider.max }}" step="1" value="{{ cutoff_slider.value }}" oninput="updateCutoffLabel(this.value)" />
+            <input id="cutoff_index" type="range" name="cutoff_index" min="{{ cutoff_slider.min }}" max="{{ cutoff_slider.max }}" step="1" value="{{ cutoff_slider.value }}" oninput="updateCutoffLabel(this.value); scheduleAutoRecalc()" />
             <div class="small">Mois sélectionné: <strong id="cutoff_label">{{ cutoff_slider.selected }}</strong></div>
           {% else %}
             <input id="cutoff_index" type="range" name="cutoff_index" min="0" max="0" step="1" value="0" disabled />
@@ -190,6 +190,14 @@
         });
       });
 
+
+      let autoRecalcTimer = null;
+      function scheduleAutoRecalc() {
+        const form = document.getElementById('main-form');
+        if (!form) return;
+        if (autoRecalcTimer) clearTimeout(autoRecalcTimer);
+        autoRecalcTimer = setTimeout(() => form.requestSubmit(), 250);
+      }
       const cutoffLabels = {{ cutoff_slider.labels | tojson if cutoff_slider else '[]' }};
       function updateCutoffLabel(indexValue) {
         const idx = parseInt(indexValue, 10);
