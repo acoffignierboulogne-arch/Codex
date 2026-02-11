@@ -6,7 +6,7 @@ Cette application Python (Flask + HTML) permet de tester la robustesse d'un mod�
 - Import d'un CSV de dépenses mensuelles (gestion BOM, séparateurs `;`/`,` et encodage UTF-8/latin-1).
 - Le CSV est conservé en mémoire côté serveur pendant la session, pour éviter le réupload à chaque ajustement.
 - Réglage de l'horizon via un curseur (1 à 24 mois).
-- Cutoff mensuel (`AAAA-MM`) pour simuler l'état du modèle à une date donnée.
+- Cutoff via curseur (pas de saisie manuelle) pour simuler l'état du modèle à une date donnée.
 - Grid search SARIMA (activé par défaut) pour minimiser la MAPE cumulée rolling de la dernière année civile complète.
 - Onglet **Prévision** (historique + projection + intervalle de confiance).
 - Onglet **Budget** (cumul réel / cumulé projeté sur l'année du cutoff).
@@ -47,3 +47,5 @@ Pour chaque combinaison SARIMA candidate :
 - et calcule la moyenne des erreurs absolues en % (MAPE cumulée rolling).
 
 Le meilleur modèle est celui avec la MAPE la plus faible.
+
+Si aucun modèle du grid search ne converge, l'application ne plante pas: elle affiche un avertissement et continue avec les paramètres manuels.

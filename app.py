@@ -42,7 +42,6 @@ def _prepare_dataframe(file_content: str, date_column: str | None, value_column:
     data.columns = ["date", "value"]
 
     data["date"] = pd.to_datetime(data["date"], errors="coerce")
-
     value_as_str = data["value"].astype(str).str.replace(" ", "", regex=False)
     value_as_str = value_as_str.str.replace(",", ".", regex=False)
     data["value"] = pd.to_numeric(value_as_str, errors="coerce")
@@ -60,27 +59,23 @@ def _prepare_dataframe(file_content: str, date_column: str | None, value_column:
     return monthly
 
 
-def _apply_cutoff(series: pd.Series, cutoff_month: str | None) -> tuple[pd.Series, pd.Timestamp]:
-    if not cutoff_month:
-        return series.copy(), series.index.max()
+def _apply_cutoff_index(series: pd.Series, cutoff_index: str | None) -> tuple[pd.Series, pd.Timestamp, int]:
+    if cutoff_index is None or cutoff_index == "":
+        idx = len(series) - 1
+    else:
+        idx = int(cutoff_index)
 
-    cutoff = pd.to_datetime(f"{cutoff_month}-01", errors="coerce")
-    if pd.isna(cutoff):
-        raise ValueError("Le format du cutoff doit être AAAA-MM.")
+    idx = max(0, min(idx, len(series) - 1))
+    cutoff = series.index[idx]
+    filtered = series.iloc[: idx + 1]
 
-    filtered = series[series.index <= cutoff]
     if filtered.empty:
-        raise ValueError("Aucune donnée <= cutoff. Ajustez le mois de cutoff.")
+        raise ValueError("Aucune donnée <= cutoff. Ajustez le curseur.")
 
-    return filtered, cutoff
+    return filtered, cutoff, idx
 
 
-def _sarima_forecast(
-    series: pd.Series,
-    periods: int,
-    order: tuple[int, int, int],
-    seasonal_order: tuple[int, int, int, int],
-):
+def _sarima_forecast(series: pd.Series, periods: int, order: tuple[int, int, int], seasonal_order: tuple[int, int, int, int]):
     model = SARIMAX(
         series,
         order=order,
@@ -108,12 +103,7 @@ def _last_complete_calendar_year(series: pd.Series) -> int:
     return int(full_years.index.max())
 
 
-def _rolling_cumulative_mape(
-    full_series: pd.Series,
-    target_year: int,
-    order: tuple[int, int, int],
-    seasonal_order: tuple[int, int, int, int],
-) -> float:
+def _rolling_cumulative_mape(full_series: pd.Series, target_year: int, order: tuple[int, int, int], seasonal_order: tuple[int, int, int, int]) -> float:
     year_data = full_series[full_series.index.year == target_year]
     if len(year_data) != 12:
         raise ValueError("L'année cible doit contenir 12 mois réels.")
@@ -123,7 +113,6 @@ def _rolling_cumulative_mape(
         raise ValueError("Le total annuel réel est nul, la MAPE n'est pas définie.")
 
     apes: list[float] = []
-
     for month_dt in sorted(year_data.index):
         train = full_series[full_series.index < month_dt]
         if len(train) < 24:
@@ -145,28 +134,10 @@ def _rolling_cumulative_mape(
     return float(sum(apes) / len(apes))
 
 
-def _grid_search(
-    series: pd.Series,
-    seasonal_period: int,
-    max_p: int,
-    max_d: int,
-    max_q: int,
-    max_P: int,
-    max_D: int,
-    max_Q: int,
-):
+def _grid_search(series: pd.Series, seasonal_period: int, max_p: int, max_d: int, max_q: int, max_P: int, max_D: int, max_Q: int):
     target_year = _last_complete_calendar_year(series)
 
-    combos = list(
-        product(
-            range(max_p + 1),
-            range(max_d + 1),
-            range(max_q + 1),
-            range(max_P + 1),
-            range(max_D + 1),
-            range(max_Q + 1),
-        )
-    )
+    combos = list(product(range(max_p + 1), range(max_d + 1), range(max_q + 1), range(max_P + 1), range(max_D + 1), range(max_Q + 1)))
     if len(combos) > MAX_GRID_COMBINATIONS:
         raise ValueError(f"Trop de combinaisons ({len(combos)}). Réduisez les bornes (max {MAX_GRID_COMBINATIONS}).")
 
@@ -180,37 +151,18 @@ def _grid_search(
         except Exception:
             continue
 
-    if not results:
-        raise ValueError("Aucun modèle SARIMA du grid search n'a convergé correctement.")
-
     results.sort(key=lambda item: item["mape"])
-    return target_year, results
+    return target_year, results, len(combos)
 
 
-def _build_forecast_figure(history: pd.Series, forecast: pd.Series, conf_int: pd.DataFrame) -> str:
+def _build_forecast_figure(history: pd.Series, forecast: pd.Series, conf_int: pd.DataFrame, cutoff: pd.Timestamp) -> str:
     fig = go.Figure()
 
-    fig.add_trace(
-        go.Scatter(
-            x=history.index,
-            y=history.values,
-            mode="lines+markers",
-            name="Historique (jusqu'au cutoff)",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=forecast.index,
-            y=forecast.values,
-            mode="lines+markers",
-            name="Prévision",
-            line=dict(dash="dash"),
-        )
-    )
+    fig.add_trace(go.Scatter(x=history.index, y=history.values, mode="lines+markers", name="Historique (jusqu'au cutoff)"))
+    fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode="lines+markers", name="Prévision", line=dict(dash="dash")))
 
     lower_col = conf_int.columns[0]
     upper_col = conf_int.columns[1]
-
     fig.add_trace(go.Scatter(x=forecast.index, y=conf_int[upper_col], mode="lines", line=dict(width=0), showlegend=False))
     fig.add_trace(
         go.Scatter(
@@ -224,7 +176,14 @@ def _build_forecast_figure(history: pd.Series, forecast: pd.Series, conf_int: pd
         )
     )
 
-    fig.update_layout(title="Prévision des dépenses mensuelles (SARIMA)", xaxis_title="Date", yaxis_title="Montant", template="plotly_white")
+    fig.add_vline(x=cutoff, line_width=2, line_dash="dot", line_color="#f97316")
+    fig.update_layout(
+        title="Prévision des dépenses mensuelles (SARIMA)",
+        xaxis_title="Date",
+        yaxis_title="Montant",
+        template="plotly_white",
+        xaxis=dict(rangeslider=dict(visible=True)),
+    )
     return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
 
@@ -282,7 +241,6 @@ def _set_cached_csv(client_id: str, content: str) -> None:
     CSV_CACHE[client_id] = content
 
 
-
 @app.route("/", methods=["GET", "POST"])
 def index():
     forecast_graph_html = None
@@ -291,9 +249,11 @@ def index():
     top_models = None
     metrics = None
     error = None
+    warning = None
 
     defaults = {
         "forecast_periods": "6",
+        "cutoff_index": "",
         "cutoff_month": "",
         "p": "1",
         "d": "1",
@@ -313,6 +273,7 @@ def index():
         "run_grid_search": "on",
         "csv_cached": "",
     }
+    cutoff_slider = None
 
     if request.method == "POST":
         form_data = {key: request.form.get(key, value) for key, value in defaults.items()}
@@ -334,7 +295,15 @@ def index():
                 raise ValueError("Veuillez importer un fichier CSV au moins une fois (ensuite il sera conservé en mémoire).")
 
             series = _prepare_dataframe(file_content, form_data["date_column"] or None, form_data["value_column"] or None)
-            history, cutoff = _apply_cutoff(series, form_data["cutoff_month"] or None)
+            history, cutoff, cutoff_idx = _apply_cutoff_index(series, form_data["cutoff_index"])
+            cutoff_labels = [dt.strftime("%Y-%m") for dt in series.index]
+            cutoff_slider = {
+                "min": 0,
+                "max": len(series) - 1,
+                "value": cutoff_idx,
+                "labels": cutoff_labels,
+                "selected": cutoff.strftime("%Y-%m"),
+            }
 
             periods = max(1, int(form_data["forecast_periods"]))
             order = (int(form_data["p"]), int(form_data["d"]), int(form_data["q"]))
@@ -343,7 +312,7 @@ def index():
             run_grid = request.form.get("run_grid_search") == "on"
 
             if run_grid:
-                target_year, gs_results = _grid_search(
+                target_year, gs_results, tested = _grid_search(
                     history,
                     seasonal_period,
                     int(form_data["max_p"]),
@@ -353,25 +322,30 @@ def index():
                     int(form_data["max_D"]),
                     int(form_data["max_Q"]),
                 )
-                best = gs_results[0]
-                order = best["order"]
-                seasonal = best["seasonal"]
-
-                top_models = [
-                    {
-                        "rank": i + 1,
-                        "order": str(item["order"]),
-                        "seasonal": str(item["seasonal"]),
-                        "mape": round(item["mape"], 3),
+                if gs_results:
+                    best = gs_results[0]
+                    order = best["order"]
+                    seasonal = best["seasonal"]
+                    top_models = [
+                        {
+                            "rank": i + 1,
+                            "order": str(item["order"]),
+                            "seasonal": str(item["seasonal"]),
+                            "mape": round(item["mape"], 3),
+                        }
+                        for i, item in enumerate(gs_results[:10])
+                    ]
+                    metrics = {
+                        "target_year": target_year,
+                        "best_mape": round(best["mape"], 3),
+                        "selected_order": str(order),
+                        "selected_seasonal": str(seasonal),
                     }
-                    for i, item in enumerate(gs_results[:10])
-                ]
-                metrics = {
-                    "target_year": target_year,
-                    "best_mape": round(best["mape"], 3),
-                    "selected_order": str(order),
-                    "selected_seasonal": str(seasonal),
-                }
+                else:
+                    warning = (
+                        f"Grid search: aucun modèle n'a convergé sur {tested} combinaisons. "
+                        "On conserve les paramètres manuels saisis."
+                    )
 
             months_to_year_end = max(0, 12 - cutoff.month)
             needed_steps = max(periods, months_to_year_end)
@@ -379,7 +353,7 @@ def index():
             _, forecast, conf_int = _sarima_forecast(history, needed_steps, order, seasonal)
             shown_forecast = forecast.iloc[:periods]
             shown_conf = conf_int.iloc[:periods]
-            forecast_graph_html = _build_forecast_figure(history, shown_forecast, shown_conf)
+            forecast_graph_html = _build_forecast_figure(history, shown_forecast, shown_conf, cutoff)
 
             budget_year = cutoff.year
             budget_df, projected_total, actual_total = _build_budget_projection(history, forecast, budget_year)
@@ -397,6 +371,8 @@ def index():
             metrics.update({"budget_year": budget_year, "projected_total": projected_total, "actual_total": actual_total})
 
             form_data["csv_cached"] = "1"
+            form_data["cutoff_index"] = str(cutoff_idx)
+            form_data["cutoff_month"] = cutoff.strftime("%Y-%m")
             defaults.update(form_data)
             defaults["run_grid_search"] = "on" if run_grid else ""
         except Exception as exc:  # noqa: BLE001
@@ -416,7 +392,9 @@ def index():
         top_models=top_models,
         metrics=metrics,
         error=error,
+        warning=warning,
         defaults=defaults,
+        cutoff_slider=cutoff_slider,
     )
 
 

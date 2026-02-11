@@ -10,9 +10,10 @@
       .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 6px rgba(0,0,0,0.08); }
       .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
       label { display: block; font-size: 0.92rem; margin-bottom: 4px; }
-      input[type="number"], input[type="text"], input[type="month"], input[type="file"] { width: 100%; padding: 7px; box-sizing: border-box; }
+      input[type="number"], input[type="text"], input[type="month"], input[type="file"], input[type="range"] { width: 100%; padding: 7px; box-sizing: border-box; }
       button { border: none; background: #2563eb; color: white; border-radius: 6px; padding: 10px 14px; cursor: pointer; }
       .error { color: #b91c1c; background: #fee2e2; padding: 10px; border-radius: 6px; margin-bottom: 16px; }
+      .warning { color: #92400e; background: #fef3c7; padding: 10px; border-radius: 6px; margin-bottom: 16px; }
       .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
       .tab-btn { background: #e5e7eb; color: #111827; }
       .tab-btn.active { background: #1d4ed8; color: #fff; }
@@ -22,6 +23,7 @@
       th, td { border: 1px solid #d1d5db; padding: 8px; font-size: 0.9rem; text-align: right; }
       th:first-child, td:first-child { text-align: left; }
       .small { color: #374151; font-size: 0.9rem; }
+      .cutoff-box { background: #fff7ed; border: 1px solid #fdba74; border-radius: 8px; padding: 10px; }
     </style>
   </head>
   <body>
@@ -30,10 +32,13 @@
     {% if error %}
       <div class="error">{{ error }}</div>
     {% endif %}
+    {% if warning %}
+      <div class="warning">{{ warning }}</div>
+    {% endif %}
 
-    <form method="post" enctype="multipart/form-data" class="card">
+    <form method="post" enctype="multipart/form-data" class="card" id="main-form">
       <h2>Paramètres</h2>
-      <p class="small">Chargez un CSV une fois, puis ajustez horizon/cutoff. Le fichier est conservé en mémoire pendant la session.</p>
+      <p class="small">Chargez un CSV une fois, puis ajustez les curseurs. Le fichier reste en mémoire pendant la session.</p>
       {% if defaults.csv_cached == "1" %}<p class="small">✅ CSV actuellement chargé en mémoire.</p>{% endif %}
 
       <div class="grid">
@@ -57,10 +62,19 @@
           <input id="forecast_periods" type="range" min="1" max="24" name="forecast_periods" value="{{ defaults.forecast_periods }}" oninput="document.getElementById('forecast_periods_value').value=this.value" />
           <input id="forecast_periods_value" type="number" min="1" max="24" value="{{ defaults.forecast_periods }}" oninput="document.getElementById('forecast_periods').value=this.value; this.form.forecast_periods.value=this.value" />
         </div>
-        <div>
-          <label for="cutoff_month">Curseur de cutoff (AAAA-MM)</label>
-          <input id="cutoff_month" type="month" name="cutoff_month" value="{{ defaults.cutoff_month }}" />
+
+        <div class="cutoff-box">
+          <label for="cutoff_index">✂️ Cutoff (sur curseur)</label>
+          {% if cutoff_slider %}
+            <input id="cutoff_index" type="range" name="cutoff_index" min="{{ cutoff_slider.min }}" max="{{ cutoff_slider.max }}" step="1" value="{{ cutoff_slider.value }}" oninput="updateCutoffLabel(this.value)" />
+            <div class="small">Mois sélectionné: <strong id="cutoff_label">{{ cutoff_slider.selected }}</strong></div>
+          {% else %}
+            <input id="cutoff_index" type="range" name="cutoff_index" min="0" max="0" step="1" value="0" disabled />
+            <div class="small">Chargez puis calculez une première fois pour activer le cutoff.</div>
+          {% endif %}
+          <input type="hidden" name="cutoff_month" value="{{ defaults.cutoff_month }}" />
         </div>
+
         <div>
           <label for="s">Période saisonnière s</label>
           <input id="s" type="number" min="2" name="s" value="{{ defaults.s }}" />
@@ -175,6 +189,15 @@
           document.getElementById(btn.dataset.tab).classList.add('active');
         });
       });
+
+      const cutoffLabels = {{ cutoff_slider.labels | tojson if cutoff_slider else '[]' }};
+      function updateCutoffLabel(indexValue) {
+        const idx = parseInt(indexValue, 10);
+        const labelEl = document.getElementById('cutoff_label');
+        if (labelEl && cutoffLabels[idx]) {
+          labelEl.textContent = cutoffLabels[idx];
+        }
+      }
     </script>
   </body>
 </html>
