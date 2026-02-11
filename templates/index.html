@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Test SARIMA - Dépenses mensuelles</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #f7f8fa;
+        color: #1f2937;
+      }
+      .container {
+        max-width: 1100px;
+        margin: 20px auto;
+        padding: 20px;
+      }
+      .card {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+        padding: 20px;
+        margin-bottom: 20px;
+      }
+      h1 {
+        margin-top: 0;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+      }
+      label {
+        font-size: 0.9rem;
+        display: block;
+        margin-bottom: 6px;
+      }
+      input[type="text"],
+      input[type="number"],
+      input[type="file"] {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        box-sizing: border-box;
+      }
+      button {
+        background: #2563eb;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 16px;
+        cursor: pointer;
+        margin-top: 12px;
+      }
+      .error {
+        background: #fee2e2;
+        color: #991b1b;
+        border: 1px solid #fecaca;
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 12px;
+      }
+      .hint {
+        color: #4b5563;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <h1>Application locale de test SARIMA</h1>
+        <p class="hint">
+          Importez un CSV de dépenses mensuelles et ajustez les paramètres SARIMA.
+          Par défaut, si les noms de colonnes ne sont pas saisis, les deux premières colonnes du CSV sont utilisées.
+        </p>
+
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" enctype="multipart/form-data">
+          <div>
+            <label for="csv_file">Fichier CSV</label>
+            <input id="csv_file" name="csv_file" type="file" accept=".csv" required />
+          </div>
+
+          <div class="grid" style="margin-top: 12px">
+            <div>
+              <label for="date_column">Colonne date (optionnel)</label>
+              <input id="date_column" name="date_column" type="text" value="{{ defaults.date_column }}" />
+            </div>
+            <div>
+              <label for="value_column">Colonne dépense (optionnel)</label>
+              <input id="value_column" name="value_column" type="text" value="{{ defaults.value_column }}" />
+            </div>
+            <div>
+              <label for="forecast_periods">Périodes à prévoir</label>
+              <input id="forecast_periods" name="forecast_periods" type="number" min="1" value="{{ defaults.forecast_periods }}" />
+            </div>
+          </div>
+
+          <h3>Paramètres SARIMA</h3>
+          <div class="grid">
+            <div>
+              <label for="p">p</label>
+              <input id="p" name="p" type="number" min="0" value="{{ defaults.p }}" />
+            </div>
+            <div>
+              <label for="d">d</label>
+              <input id="d" name="d" type="number" min="0" value="{{ defaults.d }}" />
+            </div>
+            <div>
+              <label for="q">q</label>
+              <input id="q" name="q" type="number" min="0" value="{{ defaults.q }}" />
+            </div>
+            <div>
+              <label for="P">P</label>
+              <input id="P" name="P" type="number" min="0" value="{{ defaults.P }}" />
+            </div>
+            <div>
+              <label for="D">D</label>
+              <input id="D" name="D" type="number" min="0" value="{{ defaults.D }}" />
+            </div>
+            <div>
+              <label for="Q">Q</label>
+              <input id="Q" name="Q" type="number" min="0" value="{{ defaults.Q }}" />
+            </div>
+            <div>
+              <label for="s">Saisonnalité (s)</label>
+              <input id="s" name="s" type="number" min="1" value="{{ defaults.s }}" />
+            </div>
+          </div>
+
+          <button type="submit">Lancer la prévision</button>
+        </form>
+      </div>
+
+      {% if graph_html %}
+      <div class="card">{{ graph_html | safe }}</div>
+      {% endif %}
+    </div>
+  </body>
+</html>
