@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prévisions financières SARIMA</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; background: #f8fafc; }
+      h1, h2, h3 { margin-top: 0; }
+      .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 6px rgba(0,0,0,0.08); }
+      .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+      label { display: block; font-size: 0.92rem; margin-bottom: 4px; }
+      input[type="number"], input[type="text"], input[type="month"], input[type="file"] { width: 100%; padding: 7px; box-sizing: border-box; }
+      button { border: none; background: #2563eb; color: white; border-radius: 6px; padding: 10px 14px; cursor: pointer; }
+      .error { color: #b91c1c; background: #fee2e2; padding: 10px; border-radius: 6px; margin-bottom: 16px; }
+      .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+      .tab-btn { background: #e5e7eb; color: #111827; }
+      .tab-btn.active { background: #1d4ed8; color: #fff; }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; }
+      table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+      th, td { border: 1px solid #d1d5db; padding: 8px; font-size: 0.9rem; text-align: right; }
+      th:first-child, td:first-child { text-align: left; }
+      .small { color: #374151; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <h1>SARIMA - Prévisions dépenses et budget</h1>
+
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" enctype="multipart/form-data" class="card">
+      <h2>Paramètres</h2>
+      <p class="small">Chargez un CSV une fois, puis ajustez horizon/cutoff. Le fichier est conservé en mémoire pendant la session.</p>
+      {% if defaults.csv_cached == "1" %}<p class="small">✅ CSV actuellement chargé en mémoire.</p>{% endif %}
+
+      <div class="grid">
+        <div>
+          <label for="csv_file">CSV dépenses mensuelles</label>
+          <input id="csv_file" type="file" name="csv_file" accept=".csv" />
+        </div>
+        <div>
+          <label for="date_column">Colonne date (optionnel)</label>
+          <input id="date_column" type="text" name="date_column" value="{{ defaults.date_column }}" placeholder="ex: date" />
+        </div>
+        <div>
+          <label for="value_column">Colonne montant (optionnel)</label>
+          <input id="value_column" type="text" name="value_column" value="{{ defaults.value_column }}" placeholder="ex: depense" />
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label for="forecast_periods">Horizon de prévision (mois)</label>
+          <input id="forecast_periods" type="range" min="1" max="24" name="forecast_periods" value="{{ defaults.forecast_periods }}" oninput="document.getElementById('forecast_periods_value').value=this.value" />
+          <input id="forecast_periods_value" type="number" min="1" max="24" value="{{ defaults.forecast_periods }}" oninput="document.getElementById('forecast_periods').value=this.value; this.form.forecast_periods.value=this.value" />
+        </div>
+        <div>
+          <label for="cutoff_month">Curseur de cutoff (AAAA-MM)</label>
+          <input id="cutoff_month" type="month" name="cutoff_month" value="{{ defaults.cutoff_month }}" />
+        </div>
+        <div>
+          <label for="s">Période saisonnière s</label>
+          <input id="s" type="number" min="2" name="s" value="{{ defaults.s }}" />
+        </div>
+      </div>
+
+      <h3>SARIMA manuel</h3>
+      <div class="grid">
+        <div><label>p</label><input type="number" min="0" name="p" value="{{ defaults.p }}" /></div>
+        <div><label>d</label><input type="number" min="0" name="d" value="{{ defaults.d }}" /></div>
+        <div><label>q</label><input type="number" min="0" name="q" value="{{ defaults.q }}" /></div>
+        <div><label>P</label><input type="number" min="0" name="P" value="{{ defaults.P }}" /></div>
+        <div><label>D</label><input type="number" min="0" name="D" value="{{ defaults.D }}" /></div>
+        <div><label>Q</label><input type="number" min="0" name="Q" value="{{ defaults.Q }}" /></div>
+      </div>
+
+      <h3>Grid search MAPE cumulée (dernière année civile complète)</h3>
+      <div class="grid">
+        <div>
+          <label><input type="checkbox" name="run_grid_search" {% if defaults.run_grid_search == 'on' %}checked{% endif %} /> Activer le grid search</label>
+        </div>
+        <div><label>max p</label><input type="number" min="0" name="max_p" value="{{ defaults.max_p }}" /></div>
+        <div><label>max d</label><input type="number" min="0" name="max_d" value="{{ defaults.max_d }}" /></div>
+        <div><label>max q</label><input type="number" min="0" name="max_q" value="{{ defaults.max_q }}" /></div>
+        <div><label>max P</label><input type="number" min="0" name="max_P" value="{{ defaults.max_P }}" /></div>
+        <div><label>max D</label><input type="number" min="0" name="max_D" value="{{ defaults.max_D }}" /></div>
+        <div><label>max Q</label><input type="number" min="0" name="max_Q" value="{{ defaults.max_Q }}" /></div>
+      </div>
+
+      <p><button type="submit">Calculer prévisions et budget</button></p>
+    </form>
+
+    {% if metrics %}
+      <div class="card">
+        <h2>Résumé modèle</h2>
+        <ul>
+          <li>Ordre sélectionné : <strong>{{ metrics.selected_order }}</strong></li>
+          <li>Ordre saisonnier : <strong>{{ metrics.selected_seasonal }}</strong></li>
+          {% if metrics.best_mape is not none %}
+            <li>MAPE cumulée rolling (année {{ metrics.target_year }}) : <strong>{{ metrics.best_mape }}%</strong></li>
+          {% endif %}
+          <li>Budget {{ metrics.budget_year }} projeté : <strong>{{ metrics.projected_total }}</strong></li>
+          <li>Budget {{ metrics.budget_year }} réel observé (cutoff) : <strong>{{ metrics.actual_total }}</strong></li>
+        </ul>
+      </div>
+    {% endif %}
+
+    {% if top_models %}
+      <div class="card">
+        <h2>Top modèles (grid search)</h2>
+        <table>
+          <thead><tr><th>Rang</th><th>Order</th><th>Seasonal</th><th>MAPE (%)</th></tr></thead>
+          <tbody>
+            {% for model in top_models %}
+              <tr>
+                <td>{{ model.rank }}</td>
+                <td>{{ model.order }}</td>
+                <td>{{ model.seasonal }}</td>
+                <td>{{ model.mape }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+
+    {% if forecast_graph_html or budget_graph_html %}
+      <div class="card">
+        <div class="tabs">
+          <button type="button" class="tab-btn active" data-tab="tab-forecast">Prévision</button>
+          <button type="button" class="tab-btn" data-tab="tab-budget">Budget</button>
+        </div>
+
+        <section id="tab-forecast" class="tab-panel active">
+          {{ forecast_graph_html|safe }}
+        </section>
+
+        <section id="tab-budget" class="tab-panel">
+          {{ budget_graph_html|safe }}
+          {% if budget_table %}
+            <table>
+              <thead>
+                <tr>
+                  <th>Mois</th><th>Réel</th><th>Projeté</th><th>Cumul réel</th><th>Cumul projeté</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in budget_table %}
+                  <tr>
+                    <td>{{ row['Mois'] }}</td>
+                    <td>{{ row['Réel'] }}</td>
+                    <td>{{ row['Projeté'] }}</td>
+                    <td>{{ row['Cumul réel'] }}</td>
+                    <td>{{ row['Cumul projeté'] }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+        </section>
+      </div>
+    {% endif %}
+
+    <script>
+      const buttons = document.querySelectorAll('.tab-btn');
+      const panels = document.querySelectorAll('.tab-panel');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          buttons.forEach((b) => b.classList.remove('active'));
+          panels.forEach((p) => p.classList.remove('active'));
+          btn.classList.add('active');
+          document.getElementById(btn.dataset.tab).classList.add('active');
+        });
+      });
+    </script>
+  </body>
+</html>
