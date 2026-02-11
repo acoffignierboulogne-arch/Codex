@@ -10,6 +10,7 @@ Cette application Python (Flask + HTML) permet de tester la robustesse d'un mod�
 - Grid search SARIMA (activé par défaut) pour minimiser la MAPE cumulée rolling sur l'année N-1 du cutoff.
 - Option "mode rapide" pour tester une grille allégée (pas plus larges) et réduire le temps de calcul.
 - Onglet **Prévision** (historique + projection + intervalle de confiance).
+- Onglet **Décomposition** (Série, Tendance, Saisonnalité, Résidus).
 - Onglet **Budget** (cumul réel / cumulé projeté sur l'année du cutoff).
 - Les montants sont formatés en français avec séparateur de milliers (espace) pour la lisibilité.
 

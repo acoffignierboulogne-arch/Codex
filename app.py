@@ -8,7 +8,9 @@ import webbrowser
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from flask import Flask, render_template, request, session
+from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 app = Flask(__name__)
@@ -233,6 +235,29 @@ def _build_budget_figure(yearly_df: pd.DataFrame, year: int) -> str:
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
+def _build_decomposition_figure(series: pd.Series, seasonal_period: int) -> str | None:
+    if len(series) < max(24, seasonal_period * 2):
+        return None
+
+    try:
+        dec = seasonal_decompose(series, model="additive", period=seasonal_period, extrapolate_trend="freq")
+    except Exception:
+        return None
+
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+        subplot_titles=("Série", "Tendance", "Saisonnalité", "Résidus"),
+    )
+
+    fig.add_trace(go.Scatter(x=series.index, y=series.values, mode="lines", name="Série"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=dec.trend.index, y=dec.trend.values, mode="lines", name="Trend", line=dict(color="#16a34a")), row=2, col=1)
+    fig.add_trace(go.Scatter(x=dec.seasonal.index, y=dec.seasonal.values, mode="lines", name="Seasonal", line=dict(color="#9333ea")), row=3, col=1)
+    fig.add_trace(go.Scatter(x=dec.resid.index, y=dec.resid.values, mode="lines", name="Resid", line=dict(color="#ea580c")), row=4, col=1)
+
+    fig.update_layout(height=900, title="Décomposition de la série (SARIMA)", template="plotly_white", showlegend=False)
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
 def _ensure_client_id() -> str:
     client_id = session.get("client_id")
     if not client_id:
@@ -251,7 +276,7 @@ def _set_cached_csv(client_id: str, content: str) -> None:
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    forecast_graph_html = budget_graph_html = None
+    forecast_graph_html = budget_graph_html = decomposition_graph_html = None
     budget_table = top_models = metrics = None
     error = warning = None
 
@@ -348,6 +373,7 @@ def index():
             shown_conf = conf_int.iloc[:periods]
             fitted = fit.fittedvalues.reindex(history.index)
             forecast_graph_html = _build_forecast_figure(history, shown_forecast, shown_conf, fitted, cutoff)
+            decomposition_graph_html = _build_decomposition_figure(history, seasonal_period)
 
             budget_year = cutoff.year
             budget_df, projected_total, actual_total, predicted_total = _build_budget_projection(history, forecast, budget_year)
@@ -393,6 +419,7 @@ def index():
         "index.html",
         forecast_graph_html=forecast_graph_html,
         budget_graph_html=budget_graph_html,
+        decomposition_graph_html=decomposition_graph_html,
         budget_table=budget_table,
         top_models=top_models,
         metrics=metrics,

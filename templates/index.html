@@ -150,6 +150,7 @@
         <div class="tabs">
           <button type="button" class="tab-btn active" data-tab="tab-forecast">Prévision</button>
           <button type="button" class="tab-btn" data-tab="tab-budget">Budget</button>
+          <button type="button" class="tab-btn" data-tab="tab-decomposition">Décomposition</button>
         </div>
 
         <section id="tab-forecast" class="tab-panel active">
@@ -179,6 +180,15 @@
                 {% endfor %}
               </tbody>
             </table>
+          {% endif %}
+        </section>
+
+
+        <section id="tab-decomposition" class="tab-panel">
+          {% if decomposition_graph_html %}
+            {{ decomposition_graph_html|safe }}
+          {% else %}
+            <p class="small">Décomposition indisponible (historique insuffisant pour la périodicité choisie).</p>
           {% endif %}
         </section>
       </div>
