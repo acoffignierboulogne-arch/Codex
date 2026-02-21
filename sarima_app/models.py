@@ -38,7 +38,7 @@ class SarimaForecaster:
             )
             fit = model.fit(disp=False)
             return FitResult(True, "OK", aic=fit.aic, bic=fit.bic, llf=fit.llf, model_fit=fit)
-        except Exception as exc:  # noqa: BLE001 - message utilisateur contrôlé
+        except Exception as exc:  # noqa: BLE001
             return FitResult(False, f"Échec de convergence SARIMA: {exc}")
 
     @staticmethod
@@ -46,7 +46,7 @@ class SarimaForecaster:
         pred = fit.get_forecast(steps=horizon)
         mean = pred.predicted_mean
         ci = pred.conf_int(alpha=0.05)
-        out = pd.DataFrame(
+        return pd.DataFrame(
             {
                 "date": pd.date_range(start_date, periods=horizon, freq="MS"),
                 "value": mean.values,
@@ -54,7 +54,6 @@ class SarimaForecaster:
                 "upper": ci.iloc[:, 1].values,
             }
         )
-        return out
 
     @staticmethod
     def diagnostics(fit) -> dict:
@@ -68,6 +67,7 @@ class SarimaForecaster:
     def grid_search(
         self,
         train_series: pd.Series,
+        reference_series: pd.Series,
         search_space: dict,
         target_years: Iterable[int],
         criterion: str,
@@ -83,7 +83,7 @@ class SarimaForecaster:
         combos = list(product(p_vals, d_vals, q_vals, P_vals, D_vals, Q_vals))[:max_combinations]
 
         results: list[dict] = []
-        real_df = train_series.reset_index()
+        real_df = reference_series.dropna().reset_index()
         real_df.columns = ["date", "value"]
 
         for i, (p, d, q, P, D, Q) in enumerate(combos, start=1):
@@ -91,31 +91,30 @@ class SarimaForecaster:
             fit = SarimaForecaster(train_series).fit((p, d, q), (P, D, Q, 12))
             if not fit.success:
                 continue
-            score = fit.aic
+
+            score = float(fit.aic)
             if criterion == "Écart annuel cumulé":
-                horizon = 36
-                pred = SarimaForecaster.forecast(
+                in_sample = fit.model_fit.get_prediction(start=train_series.index[0], end=train_series.index[-1]).predicted_mean
+                max_ref_date = reference_series.dropna().index.max()
+                horizon = max(1, (max_ref_date.to_period("M") - train_series.index[-1].to_period("M")).n)
+                forecast_df = SarimaForecaster.forecast(
                     fit.model_fit,
                     start_date=train_series.index[-1] + pd.offsets.MonthBegin(1),
                     horizon=horizon,
                 )[["date", "value"]]
-                comp = annual_comparison(real_df, pred)
+                pred_df = pd.concat(
+                    [
+                        pd.DataFrame({"date": in_sample.index, "value": in_sample.values}),
+                        forecast_df,
+                    ],
+                    ignore_index=True,
+                )
+                comp = annual_comparison(real_df, pred_df)
                 comp = comp[comp["Année"].isin(target_years)]
                 if comp.empty:
                     continue
                 score = float(comp["Écart relatif %"].abs().sum())
-            results.append(
-                {
-                    "p": p,
-                    "d": d,
-                    "q": q,
-                    "P": P,
-                    "D": D,
-                    "Q": Q,
-                    "score": float(score),
-                    "aic": float(fit.aic),
-                }
-            )
 
-        results = sorted(results, key=lambda x: x["score"])
-        return results[:10]
+            results.append({"p": p, "d": d, "q": q, "P": P, "D": D, "Q": Q, "score": score, "aic": float(fit.aic)})
+
+        return sorted(results, key=lambda x: x["score"])[:10]
