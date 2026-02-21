@@ -192,8 +192,12 @@ if not fixed_fit.success:
 pred_df = forecaster.forecast(fit.model_fit, start_date=cutoff + pd.offsets.MonthBegin(1), horizon=horizon)
 fixed_in_sample = fixed_fit.model_fit.get_prediction(start=valid_series.index[0], end=valid_series.index[-1]).predicted_mean
 fixed_insample_df = pd.DataFrame({"date": fixed_in_sample.index, "value": fixed_in_sample.values})
+
 # Courbe prévision affichée: historique fixe + futur scénario cutoff.
+# Important: on supprime les doublons de dates (la partie future peut chevaucher l'in-sample),
+# en gardant la valeur la plus récente (scénario cutoff) pour éviter les zigzags/segments multiples.
 all_pred = pd.concat([fixed_insample_df, pred_df[["date", "value"]]], ignore_index=True)
+all_pred = all_pred.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
 
 agg = agg_map[aggregation_mode]
 real_pre_ag = aggregate_by_period(pd.DataFrame({"date": train.index, "value": train.values}), agg)
