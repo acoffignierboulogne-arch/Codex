@@ -103,6 +103,7 @@ const frMoney = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maxim
 let parsed = [];
 let chart = null;
 let lastBest = null;
+let gridRunning = false;
 
 function fmtMoney(v) { return `${frMoney.format(v || 0)} €`; }
 function monthLabel(d) { return frMonth.format(d).replace('.', ''); }
@@ -301,48 +302,90 @@ function recompute(){
 }
 
 async function runGrid(){
-  const checks = [...document.querySelectorAll('#yearsChecks input[type=checkbox]:checked')].map(c=>c.value);
+  if (gridRunning) return;
+  const checks = [...document.querySelectorAll('#yearsChecks input[type=checkbox]:checked')].map(c=>String(c.value));
   if (!checks.length) { alert('Sélectionnez au moins une année cible.'); return; }
+
+  const aMinEl = document.getElementById('aMin');
+  const aMaxEl = document.getElementById('aMax');
+  const aStepEl = document.getElementById('aStep');
+  const bMinEl = document.getElementById('bMin');
+  const bMaxEl = document.getElementById('bMax');
+  const bStepEl = document.getElementById('bStep');
+  const gMinEl = document.getElementById('gMin');
+  const gMaxEl = document.getElementById('gMax');
+  const gStepEl = document.getElementById('gStep');
+
   const cutoffIdx = +document.getElementById('cutoff').value;
-  const horizon = +document.getElementById('horizon').value;
   const mode = document.getElementById('mode').value;
   const phi = +document.getElementById('phi').value;
   const fitSeries = parsed.slice(0, cutoffIdx+1);
 
-  const range = (min,max,step)=>{ const out=[]; for(let x=min; x<=max+1e-9; x+=step) out.push(+x.toFixed(4)); return out; };
-  const as = range(+aMin.value,+aMax.value,+aStep.value);
-  const bs = range(+bMin.value,+bMax.value,+bStep.value);
-  const gs = range(+gMin.value,+gMax.value,+gStep.value);
+  const monthsAfterCutoff = Math.max(1, parsed.length - cutoffIdx - 1);
+  const range = (min,max,step)=>{
+    if (step <= 0 || max < min) return [];
+    const out=[]; for(let x=min; x<=max+1e-9; x+=step) out.push(+x.toFixed(4));
+    return out;
+  };
+  const as = range(+aMinEl.value,+aMaxEl.value,+aStepEl.value);
+  const bs = range(+bMinEl.value,+bMaxEl.value,+bStepEl.value);
+  const gs = range(+gMinEl.value,+gMaxEl.value,+gStepEl.value);
   const total = as.length*bs.length*gs.length;
+  if (!total) { gridResult.textContent = 'Paramètres de grille invalides.'; return; }
+
+  gridRunning = true;
+  gridBtn.disabled = true;
   const bar = document.getElementById('progressBar');
+  bar.style.width = '0%';
+  top5.innerHTML = '';
+  gridResult.textContent = `Calcul en cours (${total} combinaisons)...`;
+
+  const realMap={};
+  parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
+
   const top=[];
   let done=0;
   for (const a of as){
     for (const b of bs){
       for (const g of gs){
-        const hw = fitHoltWinters(fitSeries, a,b,g,phi,mode,horizon);
-        if (!hw) continue;
-        const predMap={};
-        for(let h=1; h<=horizon; h++){
-          const dt = addMonths(parsed[cutoffIdx].date,h).toISOString().slice(0,7);
-          predMap[dt]=hw.forecasts[h-1];
+        const hw = fitHoltWinters(fitSeries, a,b,g,phi,mode,monthsAfterCutoff);
+        if (hw) {
+          const predMap={};
+          hw.fitted.forEach((v, i) => {
+            if (v === null || v === undefined) return;
+            predMap[parsed[i].date.toISOString().slice(0,7)] = v;
+          });
+          for(let h=1; h<=monthsAfterCutoff; h++){
+            const dt = addMonths(parsed[cutoffIdx].date,h).toISOString().slice(0,7);
+            predMap[dt]=hw.forecasts[h-1];
+          }
+
+          const years = computeAnnual(realMap,predMap).filter(r=>checks.includes(String(r.year)));
+          const score = years.length ? years.reduce((x,r)=>x+r.rel,0) : Infinity;
+          if (Number.isFinite(score)) {
+            top.push({a,b,g,score});
+            top.sort((x,y)=>x.score-y.score);
+            if (top.length>5) top.pop();
+          }
         }
-        const realMap={}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
-        const years = computeAnnual(realMap,predMap).filter(r=>checks.includes(r.year));
-        const score = years.length ? years.reduce((x,r)=>x+r.rel,0) : Infinity;
-        if (Number.isFinite(score)) {
-          top.push({a,b,g,score}); top.sort((x,y)=>x.score-y.score); if (top.length>5) top.pop();
-        }
-        done++; bar.style.width = `${(100*done/total).toFixed(1)}%`;
+        done++;
+        bar.style.width = `${(100*done/total).toFixed(1)}%`;
       }
     }
     await new Promise(r=>setTimeout(r,0));
   }
-  if (!top.length){ gridResult.textContent='Aucune combinaison valide.'; return; }
-  lastBest = top[0];
-  gridResult.textContent = `Meilleur: α=${lastBest.a}, β=${lastBest.b}, γ=${lastBest.g} | score=${lastBest.score.toFixed(3)}`;
-  applyBest.disabled = false;
-  top5.innerHTML = '<tr><th>Rang</th><th>α</th><th>β</th><th>γ</th><th>Score</th></tr>' + top.map((r,i)=>`<tr><td>${i+1}</td><td>${r.a}</td><td>${r.b}</td><td>${r.g}</td><td>${r.score.toFixed(3)}</td></tr>`).join('');
+
+  if (!top.length){
+    gridResult.textContent='Aucune combinaison valide pour les années sélectionnées. Vérifiez le cutoff et les années cibles.';
+    applyBest.disabled = true;
+  } else {
+    lastBest = top[0];
+    gridResult.textContent = `Meilleur: α=${lastBest.a}, β=${lastBest.b}, γ=${lastBest.g} | score cumulé=${lastBest.score.toFixed(3)}%`;
+    applyBest.disabled = false;
+    top5.innerHTML = '<tr><th>Rang</th><th>α</th><th>β</th><th>γ</th><th>Score cumulé</th></tr>' + top.map((r,i)=>`<tr><td>${i+1}</td><td>${r.a}</td><td>${r.b}</td><td>${r.g}</td><td>${r.score.toFixed(3)}%</td></tr>`).join('');
+  }
+  gridRunning = false;
+  gridBtn.disabled = parsed.length < 24;
 }
 
 fileInput.onchange = (e)=>loadFile(e.target.files[0]);
