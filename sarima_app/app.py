@@ -144,11 +144,17 @@ if len(valid_series) < 24:
 with st.sidebar:
     st.subheader("Paramètres SARIMA")
     p = st.slider("p", 0, 5, key="p")
+    st.caption("p (AR): mémoire des valeurs passées. ↑p = modèle plus sensible aux dépendances temporelles, mais plus complexe.")
     d = st.slider("d", 0, 2, key="d")
+    st.caption("d (différenciation): retire la tendance de fond. d=0 si série déjà stable, d=1/2 si tendance marquée.")
     q = st.slider("q", 0, 5, key="q")
+    st.caption("q (MA): corrige les chocs/erreurs récents. ↑q aide si la série subit des à-coups court terme.")
     P = st.slider("P", 0, 3, key="P")
+    st.caption("P (AR saisonnier): mémoire des mêmes mois des années passées.")
     D = st.slider("D", 0, 2, key="D")
+    st.caption("D (diff saisonnière): enlève une saisonnalité structurelle annuelle persistante.")
     Q = st.slider("Q", 0, 3, key="Q")
+    st.caption("Q (MA saisonnier): absorbe les chocs saisonniers récurrents.")
 
     min_cut = valid_series.index[23]
     max_cut = valid_series.index[-1]
@@ -190,6 +196,24 @@ m1.metric("AIC", f"{fit.aic:.2f}")
 m2.metric("BIC", f"{fit.bic:.2f}")
 m3.metric("Log-likelihood", f"{fit.llf:.2f}")
 st.markdown("<p class='note'>AIC/BIC: critères de qualité pénalisant la complexité (plus bas = meilleur compromis). Log-likelihood: qualité d'ajustement brut (plus haut = mieux).</p>", unsafe_allow_html=True)
+
+seasonality_ratio = float(valid_series.groupby(valid_series.index.month).mean().std() / max(valid_series.std(), 1e-9))
+volatility_ratio = float(valid_series.std() / max(abs(valid_series.mean()), 1e-9))
+ll_note = "Un log-likelihood négatif est fréquent sur des séries monétaires: ce n'est PAS, à lui seul, un mauvais signe."
+if fit.llf is not None and fit.llf > 0:
+    ll_note = "Log-likelihood positif: ajustement statistique global plutôt favorable."
+
+st.markdown(
+    f"""
+<div class='note'>
+<b>Lecture rapide de vos données :</b><br>
+- Saisonnière estimée : <b>{'forte' if seasonality_ratio > 0.35 else 'modérée' if seasonality_ratio > 0.15 else 'faible'}</b> (ratio saisonnalité ≈ {seasonality_ratio:.2f}).<br>
+- Volatilité relative : <b>{'élevée' if volatility_ratio > 0.6 else 'moyenne' if volatility_ratio > 0.25 else 'faible'}</b> (écart-type / moyenne ≈ {volatility_ratio:.2f}).<br>
+- {ll_note}
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 st.markdown("<p class='title'>Comparaison annuelle cumulée (années complètes)</p>", unsafe_allow_html=True)
 annual = annual_comparison(pd.DataFrame({"date": valid_series.index, "value": valid_series.values}), all_pred)
