@@ -23,11 +23,16 @@ streamlit run app.py
 
 ## Exécution depuis Spyder
 Vous pouvez lancer directement avec `%runfile app.py --wdir`:
-- le script détecte Spyder,
+- le script détecte Spyder (même si `--wdir` n'est pas propagé),
 - démarre automatiquement `streamlit run app.py` sur `http://127.0.0.1:8501`,
 - et ouvre le navigateur.
 
-Si l'auto-lancement échoue, lancez manuellement:
+⚠️ Dans la console IPython de Spyder, `streamlit run app.py` **sans** `!` provoque un `SyntaxError`.
+Utilisez:
+```python
+!streamlit run app.py
+```
+ou un terminal classique:
 ```bash
 streamlit run app.py
 ```

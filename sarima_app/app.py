@@ -8,13 +8,24 @@ import sys
 import time
 import webbrowser
 
-# Bootstrap Spyder: %runfile passe souvent --wdir, on démarre Streamlit automatiquement.
-if __name__ == "__main__" and "--wdir" in sys.argv:
+
+def _is_probably_spyder() -> bool:
+    """Détecte un lancement depuis Spyder même si --wdir est absent de sys.argv."""
+    if "--wdir" in sys.argv:
+        return True
+    if any(k.startswith("SPYDER") for k in os.environ):
+        return True
+    return "spyder_kernels" in sys.modules
+
+
+# Bootstrap Spyder: démarre Streamlit automatiquement pour ouvrir une URL locale.
+if __name__ == "__main__" and _is_probably_spyder():
     url = "http://127.0.0.1:8501"
     if importlib.util.find_spec("streamlit") is None:
         print("[ERREUR] Le module streamlit n'est pas installé dans cet environnement Python.")
         print("[INFO] Installez les dépendances puis relancez:")
         print("       pip install -r requirements.txt")
+        print("[INFO] Depuis la console IPython de Spyder, utilisez aussi: !streamlit run app.py")
         sys.exit(1)
 
     cmd = [
@@ -37,7 +48,8 @@ if __name__ == "__main__" and "--wdir" in sys.argv:
         sys.exit(0)
     except Exception as exc:  # noqa: BLE001
         print(f"[ERREUR] Impossible de lancer Streamlit automatiquement: {exc}")
-        print("[INFO] Lancez manuellement: streamlit run app.py")
+        print("[INFO] Lancez manuellement (terminal): streamlit run app.py")
+        print("[INFO] Ou depuis la console Spyder: !streamlit run app.py")
         sys.exit(1)
 
 import matplotlib.pyplot as plt
@@ -56,7 +68,8 @@ st.set_page_config(page_title="SARIMA Dépenses", layout="wide")
 # Exécution sécurisée hors runtime Streamlit (ex: python app.py).
 if get_script_run_ctx() is None:
     print("[INFO] Cette application doit être lancée via Streamlit.")
-    print("[INFO] Commande: streamlit run app.py")
+    print("[INFO] Terminal: streamlit run app.py")
+    print("[INFO] Console Spyder/IPython: !streamlit run app.py")
     sys.exit(0)
 
 st.markdown(
