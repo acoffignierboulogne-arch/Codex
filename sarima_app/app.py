@@ -404,7 +404,7 @@ def render_diagnostics(model: SARIMAModel, df: pd.DataFrame, cutoff_date: pd.Tim
         showlegend=False,
         margin=dict(l=50, r=20, t=30, b=40)
     )
-    st.plotly_chart(fig_resid, use_container_width=True)
+    st.plotly_chart(fig_resid, width='stretch')
 
     # --- Histogramme + QQ-plot côte à côte ---
     col1, col2 = st.columns(2)
@@ -427,7 +427,7 @@ def render_diagnostics(model: SARIMAModel, df: pd.DataFrame, cutoff_date: pd.Tim
         ax_hist.set_ylabel('Fréquence', fontsize=9)
         ax_hist.set_title('Histogramme des résidus', fontsize=10)
         plt.tight_layout()
-        st.pyplot(fig_hist, use_container_width=True)
+        st.pyplot(fig_hist, width='stretch')
         plt.close(fig_hist)
 
     with col2:
@@ -445,7 +445,7 @@ def render_diagnostics(model: SARIMAModel, df: pd.DataFrame, cutoff_date: pd.Tim
         ax_qq.set_title('QQ-plot des résidus', fontsize=10)
         ax_qq.legend(fontsize=8)
         plt.tight_layout()
-        st.pyplot(fig_qq, use_container_width=True)
+        st.pyplot(fig_qq, width='stretch')
         plt.close(fig_qq)
 
     # --- ACF et PACF ---
@@ -461,7 +461,7 @@ def render_diagnostics(model: SARIMAModel, df: pd.DataFrame, cutoff_date: pd.Tim
                 ax_acf.set_title('ACF des résidus', fontsize=10)
                 ax_acf.set_xlabel('Lag (mois)', fontsize=9)
                 plt.tight_layout()
-                st.pyplot(fig_acf, use_container_width=True)
+                st.pyplot(fig_acf, width='stretch')
                 plt.close(fig_acf)
             except Exception as e:
                 st.warning(f"Impossible d'afficher l'ACF : {e}")
@@ -475,7 +475,7 @@ def render_diagnostics(model: SARIMAModel, df: pd.DataFrame, cutoff_date: pd.Tim
                 ax_pacf.set_title('PACF des résidus', fontsize=10)
                 ax_pacf.set_xlabel('Lag (mois)', fontsize=9)
                 plt.tight_layout()
-                st.pyplot(fig_pacf, use_container_width=True)
+                st.pyplot(fig_pacf, width='stretch')
                 plt.close(fig_pacf)
             except Exception as e:
                 st.warning(f"Impossible d'afficher le PACF : {e}")
@@ -497,7 +497,7 @@ def render_diagnostics(model: SARIMAModel, df: pd.DataFrame, cutoff_date: pd.Tim
         # Formatage des colonnes numériques
         lb_display['Statistique LB'] = lb_display['Statistique LB'].map('{:.4f}'.format)
         lb_display['p-value'] = lb_display['p-value'].map('{:.4f}'.format)
-        st.dataframe(lb_display, use_container_width=True)
+        st.dataframe(lb_display, width='stretch')
     else:
         st.warning("Impossible de calculer le test de Ljung-Box.")
 
@@ -709,7 +709,7 @@ def render_grid_search(df: pd.DataFrame, cutoff_date: pd.Timestamp):
         df_display.index = range(1, len(df_display) + 1)
         df_display.index.name = "Rang"
 
-        st.dataframe(df_display, use_container_width=True)
+        st.dataframe(df_display, width='stretch')
 
         # Bouton pour appliquer le meilleur modèle
         if gs_results:
@@ -956,7 +956,7 @@ def main():
                 'Abréviation avec point', 'Format ISO partiel'
             ]
         })
-        st.dataframe(df_formats, use_container_width=True, hide_index=True)
+        st.dataframe(df_formats, width='stretch', hide_index=True)
         return
 
     # -----------------------------------------------------------------------
@@ -1075,7 +1075,7 @@ def main():
                 cutoff_date=cutoff_date,
                 mode=mode_agregation
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             # Graphique sans prévision
             fig_only = go.Figure()
@@ -1097,7 +1097,7 @@ def main():
                 plot_bgcolor='white',
                 paper_bgcolor='white'
             )
-            st.plotly_chart(fig_only, use_container_width=True)
+            st.plotly_chart(fig_only, width='stretch')
 
         # Table de données agrégées
         st.markdown("#### Données et prévisions")
@@ -1141,7 +1141,7 @@ def main():
             for col in df_fmt.columns:
                 df_fmt[col] = fmt_col(df_show[col])
 
-            st.dataframe(df_fmt, use_container_width=True)
+            st.dataframe(df_fmt, width='stretch')
 
         # --- Tableau de performance annuelle ---
         st.markdown("#### Performance annuelle (validation post-cutoff)")
@@ -1164,7 +1164,7 @@ def main():
                         lambda x: format_fr_pct(x) if pd.notna(x) else "N/A"
                     )
 
-                st.dataframe(comp_display, use_container_width=True)
+                st.dataframe(comp_display, width='stretch')
 
                 # Métriques globales sur les données de validation
                 actual_post_series = df[df.index > cutoff_date]['valeur']
