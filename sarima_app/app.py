@@ -75,6 +75,12 @@ st.caption("Graphique en priorité, réglages en sidebar, recalcul automatique �
 for k, v in {"p": 1, "d": 1, "q": 1, "P": 1, "D": 1, "Q": 1}.items():
     st.session_state.setdefault(k, v)
 
+# Applique les meilleurs paramètres AVANT l'instanciation des widgets (contrainte Streamlit).
+pending_best = st.session_state.pop("pending_best_params", None)
+if pending_best is not None:
+    for key in ["p", "d", "q", "P", "D", "Q"]:
+        st.session_state[key] = int(pending_best[key])
+
 @st.cache_data(show_spinner=False)
 def cached_load(uploaded_file):
     return load_csv(uploaded_file)
@@ -237,8 +243,7 @@ if st.session_state.get("grid_top"):
     best = st.session_state["grid_top"][0]
     st.success(f"Meilleur modèle: (p,d,q)=({best['p']},{best['d']},{best['q']}), (P,D,Q)=({best['P']},{best['D']},{best['Q']})")
     if st.button("Appliquer les meilleurs paramètres"):
-        for k in ["p", "d", "q", "P", "D", "Q"]:
-            st.session_state[k] = int(best[k])
+        st.session_state["pending_best_params"] = best
         st.rerun()
 
 st.markdown("<p class='title'>Diagnostics SARIMA</p>", unsafe_allow_html=True)
