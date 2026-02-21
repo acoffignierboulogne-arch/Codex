@@ -22,9 +22,12 @@ streamlit run app.py
 - `evaluation.py` : agrégation temporelle et évaluation annuelle.
 
 ## Exécution depuis Spyder
-Ne lancez pas `app.py` avec `%runfile` (mode bare).
-Utilisez un terminal:
+Vous pouvez lancer directement avec `%runfile app.py --wdir`:
+- le script détecte Spyder,
+- démarre automatiquement `streamlit run app.py` sur `http://127.0.0.1:8501`,
+- et ouvre le navigateur.
+
+Si l'auto-lancement échoue, lancez manuellement:
 ```bash
 streamlit run app.py
 ```
-Sinon, l'application quitte volontairement avec un message d'information.

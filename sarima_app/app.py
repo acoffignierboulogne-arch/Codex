@@ -1,7 +1,45 @@
 """Application Streamlit SARIMA avec UI orientée dashboard."""
 from __future__ import annotations
 
+import importlib.util
+import os
+import subprocess
 import sys
+import time
+import webbrowser
+
+# Bootstrap Spyder: %runfile passe souvent --wdir, on démarre Streamlit automatiquement.
+if __name__ == "__main__" and "--wdir" in sys.argv:
+    url = "http://127.0.0.1:8501"
+    if importlib.util.find_spec("streamlit") is None:
+        print("[ERREUR] Le module streamlit n'est pas installé dans cet environnement Python.")
+        print("[INFO] Installez les dépendances puis relancez:")
+        print("       pip install -r requirements.txt")
+        sys.exit(1)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        os.path.abspath(__file__),
+        "--server.address",
+        "127.0.0.1",
+        "--server.port",
+        "8501",
+    ]
+    print("[INFO] Lancement automatique Streamlit depuis Spyder...")
+    print("[INFO] URL:", url)
+    try:
+        subprocess.Popen(cmd)
+        time.sleep(1.2)
+        webbrowser.open(url)
+        sys.exit(0)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERREUR] Impossible de lancer Streamlit automatiquement: {exc}")
+        print("[INFO] Lancez manuellement: streamlit run app.py")
+        sys.exit(1)
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,10 +53,9 @@ from models import SarimaForecaster
 
 st.set_page_config(page_title="SARIMA Dépenses", layout="wide")
 
-# Exécution sécurisée: si lancé depuis Spyder/%runfile (hors runtime Streamlit),
-# on affiche une consigne claire puis on quitte proprement pour éviter les faux crashes.
+# Exécution sécurisée hors runtime Streamlit (ex: python app.py).
 if get_script_run_ctx() is None:
-    print("[INFO] Cette application doit être lancée avec Streamlit, pas avec %runfile.")
+    print("[INFO] Cette application doit être lancée via Streamlit.")
     print("[INFO] Commande: streamlit run app.py")
     sys.exit(0)
 
