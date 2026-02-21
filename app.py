@@ -445,13 +445,5 @@ def index():
 
 
 if __name__ == "__main__":
-    url = "http://127.0.0.1:5000"
-
-    def _open_browser() -> None:
-        try:
-            webbrowser.open_new(url)
-        except Exception:
-            pass
-
-    threading.Timer(0.8, _open_browser).start()
-    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False, threaded=True)
+    port = 5000
+    app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)

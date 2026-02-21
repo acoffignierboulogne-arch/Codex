@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Holt-Winters — Prévision dépenses hospitalières</title>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f7f8fa;
+      color: #1f2937;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    h1 { margin-top: 0; font-size: 1.5rem; }
+    h3 { margin: 16px 0 8px; font-size: 1rem; }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.08);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .hint { color: #4b5563; font-size: .88rem; margin-bottom: 12px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+    }
+    label { font-size: .88rem; display: block; margin-bottom: 4px; font-weight: 600; }
+    input[type="text"], input[type="number"], select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: .9rem;
+    }
+    input[type="file"] {
+      width: 100%;
+      padding: 6px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: .9rem;
+    }
+    button {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      cursor: pointer;
+      font-size: .95rem;
+      margin-top: 14px;
+    }
+    button:hover { background: #1d4ed8; }
+    .error {
+      background: #fee2e2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+    .metrics {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .metric-box {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 10px 16px;
+      min-width: 130px;
+    }
+    .metric-label { font-size: .78rem; color: #1e40af; }
+    .metric-value { font-size: 1.15rem; font-weight: 700; color: #1e3a8a; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .88rem;
+      margin-top: 12px;
+    }
+    th { background: #eff6ff; color: #1e40af; padding: 8px 12px; text-align: left; }
+    td { padding: 7px 12px; border-bottom: 1px solid #f3f4f6; }
+    tr:last-child td { border-bottom: none; }
+    #chart { width: 100%; min-height: 420px; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="card">
+    <h1>Test Holt-Winters — Prévision dépenses hospitalières</h1>
+    <p class="hint">
+      Fichier CSV avec deux colonnes (date, dépense). Pas de serveur requis — tout se calcule dans le navigateur.
+    </p>
+
+    <div>
+      <label for="csvFile">Fichier CSV</label>
+      <input type="file" id="csvFile" accept=".csv" />
+    </div>
+
+    <div class="grid" style="margin-top:12px">
+      <div>
+        <label for="dateCol">Colonne date</label>
+        <input type="text" id="dateCol" placeholder="auto (1ère col.)" />
+      </div>
+      <div>
+        <label for="valCol">Colonne dépense</label>
+        <input type="text" id="valCol" placeholder="auto (2ème col.)" />
+      </div>
+      <div>
+        <label for="periods">Périodes à prévoir</label>
+        <input type="number" id="periods" value="12" min="1" max="60" />
+      </div>
+    </div>
+
+    <h3>Paramètres Holt-Winters</h3>
+    <div class="grid">
+      <div>
+        <label for="alpha">α — niveau (0–1)</label>
+        <input type="number" id="alpha" value="0.3" min="0.01" max="0.99" step="0.01" />
+      </div>
+      <div>
+        <label for="beta">β — tendance (0–1)</label>
+        <input type="number" id="beta" value="0.1" min="0.01" max="0.99" step="0.01" />
+      </div>
+      <div>
+        <label for="gamma">γ — saisonnalité (0–1)</label>
+        <input type="number" id="gamma" value="0.3" min="0.01" max="0.99" step="0.01" />
+      </div>
+      <div>
+        <label for="season">Période saisonnière (m)</label>
+        <input type="number" id="season" value="12" min="2" max="24" />
+      </div>
+      <div>
+        <label for="model">Type de modèle</label>
+        <select id="model">
+          <option value="additive">Additif</option>
+          <option value="multiplicative">Multiplicatif</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="errorBox" style="display:none" class="error"></div>
+    <button onclick="run()">Lancer la prévision</button>
+  </div>
+
+  <div class="card" id="chartCard" style="display:none">
+    <h3>Graphique</h3>
+    <div id="chart"></div>
+  </div>
+
+  <div class="card" id="metricsCard" style="display:none">
+    <h3>Métriques d'erreur (in-sample)</h3>
+    <div class="metrics" id="metricsBox"></div>
+  </div>
+
+  <div class="card" id="tableCard" style="display:none">
+    <h3>Prévisions</h3>
+    <table id="forecastTable"></table>
+  </div>
+
+</div>
+
+<script>
+/* ── CSV parser minimal ─────────────────────────────────────────────────── */
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) throw new Error("CSV trop court.");
+  const sep = lines[0].includes(';') ? ';' : ',';
+  const headers = lines[0].split(sep).map(h => h.trim().replace(/^"|"$/g,''));
+  const rows = lines.slice(1).map(l => {
+    const cells = l.split(sep).map(c => c.trim().replace(/^"|"$/g,''));
+    const obj = {};
+    headers.forEach((h,i) => obj[h] = cells[i] ?? '');
+    return obj;
+  });
+  return { headers, rows };
+}
+
+/* ── Holt-Winters Triple Exponential Smoothing ─────────────────────────── */
+function holtWinters(y, alpha, beta, gamma, m, model) {
+  const n = y.length;
+  if (n < 2 * m) throw new Error(`Pas assez de données : il faut au moins ${2 * m} observations pour m=${m}.`);
+
+  // Initialisation
+  let level, trend;
+  // Niveau initial = moyenne de la 1ère saison
+  let s0 = 0;
+  for (let i = 0; i < m; i++) s0 += y[i];
+  level = s0 / m;
+
+  // Tendance initiale = moyenne des pentes entre saison 1 et saison 2
+  let trendSum = 0;
+  for (let i = 0; i < m; i++) trendSum += (y[m + i] - y[i]) / m;
+  trend = trendSum / m;
+
+  // Indices saisonniers initiaux
+  const seasonal = new Array(n + 100).fill(0);
+  if (model === 'additive') {
+    for (let i = 0; i < m; i++) seasonal[i] = y[i] - level;
+  } else {
+    for (let i = 0; i < m; i++) seasonal[i] = level !== 0 ? y[i] / level : 1;
+  }
+
+  const fitted = [];
+  let L = level, T = trend;
+
+  for (let t = 0; t < n; t++) {
+    const s = seasonal[t];
+    let Lprev = L, Tprev = T;
+
+    // Mise à jour
+    if (model === 'additive') {
+      L = alpha * (y[t] - s) + (1 - alpha) * (Lprev + Tprev);
+      T = beta * (L - Lprev) + (1 - beta) * Tprev;
+      seasonal[t + m] = gamma * (y[t] - L) + (1 - gamma) * s;
+      fitted.push(Lprev + Tprev + s);
+    } else {
+      const denom = s !== 0 ? s : 1;
+      L = alpha * (y[t] / denom) + (1 - alpha) * (Lprev + Tprev);
+      T = beta * (L - Lprev) + (1 - beta) * Tprev;
+      seasonal[t + m] = gamma * (y[t] / (L !== 0 ? L : 1)) + (1 - gamma) * s;
+      fitted.push((Lprev + Tprev) * s);
+    }
+  }
+
+  // Prévisions
+  const forecasts = [];
+  for (let h = 1; h <= 100; h++) {
+    const si = seasonal[n + (h - 1) % m];
+    if (model === 'additive') {
+      forecasts.push(L + h * T + si);
+    } else {
+      forecasts.push((L + h * T) * si);
+    }
+  }
+
+  return { fitted, forecasts };
+}
+
+/* ── Métriques ─────────────────────────────────────────────────────────── */
+function metrics(actual, fitted) {
+  const n = actual.length;
+  let mae = 0, sse = 0, absSum = 0;
+  for (let i = 0; i < n; i++) {
+    const e = actual[i] - fitted[i];
+    mae += Math.abs(e);
+    sse += e * e;
+    absSum += Math.abs(actual[i]);
+  }
+  mae /= n;
+  const rmse = Math.sqrt(sse / n);
+  const mape = absSum > 0 ? (mae / (absSum / n)) * 100 : NaN;
+  return { mae, rmse, mape };
+}
+
+/* ── Génération des labels de dates futurs ─────────────────────────────── */
+function nextMonthLabel(lastLabel, step) {
+  // Tente de parser la date ; sinon retourne "t+N"
+  const d = new Date(lastLabel);
+  if (isNaN(d.getTime())) return `t+${step}`;
+  d.setMonth(d.getMonth() + step);
+  return d.toISOString().slice(0, 10);
+}
+
+/* ── Main ──────────────────────────────────────────────────────────────── */
+function showError(msg) {
+  const box = document.getElementById('errorBox');
+  box.textContent = msg;
+  box.style.display = 'block';
+}
+function hideError() {
+  document.getElementById('errorBox').style.display = 'none';
+}
+
+function run() {
+  hideError();
+  ['chartCard','metricsCard','tableCard'].forEach(id =>
+    document.getElementById(id).style.display = 'none');
+
+  const alpha  = parseFloat(document.getElementById('alpha').value);
+  const beta   = parseFloat(document.getElementById('beta').value);
+  const gamma  = parseFloat(document.getElementById('gamma').value);
+  const m      = parseInt(document.getElementById('season').value);
+  const model  = document.getElementById('model').value;
+  const nFcast = parseInt(document.getElementById('periods').value);
+
+  const file = document.getElementById('csvFile').files[0];
+  if (!file) { showError("Veuillez sélectionner un fichier CSV."); return; }
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const { headers, rows } = parseCSV(e.target.result);
+
+      const dateColInput = document.getElementById('dateCol').value.trim();
+      const valColInput  = document.getElementById('valCol').value.trim();
+      const dateCol = dateColInput || headers[0];
+      const valCol  = valColInput  || headers[1];
+
+      if (!headers.includes(dateCol)) throw new Error(`Colonne date "${dateCol}" introuvable.`);
+      if (!headers.includes(valCol))  throw new Error(`Colonne dépense "${valCol}" introuvable.`);
+
+      const dates = rows.map(r => r[dateCol]);
+      const y     = rows.map(r => parseFloat(r[valCol]));
+      if (y.some(isNaN)) throw new Error("Valeurs non numériques dans la colonne dépense.");
+
+      const { fitted, forecasts } = holtWinters(y, alpha, beta, gamma, m, model);
+      const met = metrics(y, fitted);
+
+      // Labels futurs
+      const lastDate = dates[dates.length - 1];
+      const futureDates = [];
+      for (let h = 1; h <= nFcast; h++) futureDates.push(nextMonthLabel(lastDate, h));
+
+      // ── Graphique Plotly
+      const tracePast = {
+        x: dates, y,
+        mode: 'lines+markers', name: 'Historique',
+        line: { color: '#2563eb', width: 2 },
+        marker: { size: 5 }
+      };
+      const traceFitted = {
+        x: dates, y: fitted,
+        mode: 'lines', name: 'Ajusté (in-sample)',
+        line: { color: '#10b981', width: 1.5, dash: 'dot' }
+      };
+      const traceForecast = {
+        x: futureDates, y: forecasts.slice(0, nFcast),
+        mode: 'lines+markers', name: 'Prévision',
+        line: { color: '#f59e0b', width: 2, dash: 'dash' },
+        marker: { size: 6, symbol: 'diamond' }
+      };
+
+      const layout = {
+        margin: { t: 30, b: 50, l: 60, r: 20 },
+        legend: { orientation: 'h', y: -0.15 },
+        xaxis: { title: 'Date' },
+        yaxis: { title: 'Dépenses (€)' },
+        hovermode: 'x unified'
+      };
+
+      document.getElementById('chartCard').style.display = '';
+      Plotly.newPlot('chart', [tracePast, traceFitted, traceForecast], layout, { responsive: true });
+
+      // ── Métriques
+      document.getElementById('metricsCard').style.display = '';
+      document.getElementById('metricsBox').innerHTML = `
+        <div class="metric-box">
+          <div class="metric-label">MAE</div>
+          <div class="metric-value">${met.mae.toFixed(2)} €</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">RMSE</div>
+          <div class="metric-value">${met.rmse.toFixed(2)} €</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">MAPE</div>
+          <div class="metric-value">${isNaN(met.mape) ? 'N/A' : met.mape.toFixed(2) + ' %'}</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Observations</div>
+          <div class="metric-value">${y.length}</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Modèle</div>
+          <div class="metric-value">${model === 'additive' ? 'Additif' : 'Multiplicatif'}</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">α / β / γ</div>
+          <div class="metric-value">${alpha} / ${beta} / ${gamma}</div>
+        </div>
+      `;
+
+      // ── Tableau de prévisions
+      document.getElementById('tableCard').style.display = '';
+      let html = '<tr><th>#</th><th>Date</th><th>Prévision (€)</th></tr>';
+      for (let h = 0; h < nFcast; h++) {
+        html += `<tr>
+          <td>${h + 1}</td>
+          <td>${futureDates[h]}</td>
+          <td><strong>${forecasts[h].toFixed(2)}</strong></td>
+        </tr>`;
+      }
+      document.getElementById('forecastTable').innerHTML = html;
+
+    } catch (err) {
+      showError(err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+</script>
+</body>
+</html>
