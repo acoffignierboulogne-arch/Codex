@@ -45,9 +45,11 @@ MONTH_MAP = {
 def _parse_date(value: str) -> pd.Timestamp | None:
     s = str(value).strip().lower()
     patterns = [
-        r"^(\d{1,2})/(\d{4})$",
-        r"^(\d{1,2})/(\d{1,2})/(\d{4})$",
-        r"^(\d{4})[-/](\d{1,2})$",
+        r"^(\d{1,2})/(\d{4})$",                # MM/AAAA
+        r"^(\d{1,2})/(\d{1,2})/(\d{4})$",      # JJ/MM/AAAA
+        r"^(\d{4})[-/](\d{1,2})$",              # AAAA-MM
+        r"^(\d{4})-(\d{1,2})-(\d{1,2})$",      # AAAA-MM-JJ
+        r"^(\d{4})/(\d{1,2})/(\d{1,2})$",      # AAAA/MM/JJ
     ]
     m = re.match(patterns[0], s)
     if m:
@@ -58,11 +60,18 @@ def _parse_date(value: str) -> pd.Timestamp | None:
     m = re.match(patterns[2], s)
     if m:
         return pd.Timestamp(year=int(m.group(1)), month=int(m.group(2)), day=1)
+    m = re.match(patterns[3], s)
+    if m:
+        return pd.Timestamp(year=int(m.group(1)), month=int(m.group(2)), day=1)
+    m = re.match(patterns[4], s)
+    if m:
+        return pd.Timestamp(year=int(m.group(1)), month=int(m.group(2)), day=1)
     m = re.match(r"^([a-zéûôîç\.]+)[-\s](\d{4})$", s)
     if m:
         month = MONTH_MAP.get(m.group(1).replace(".", ""))
         if month:
             return pd.Timestamp(year=int(m.group(2)), month=month, day=1)
+    # Fallback permissif: dayfirst=True pour formats français hors ISO explicites.
     dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
     if pd.isna(dt):
         return None
