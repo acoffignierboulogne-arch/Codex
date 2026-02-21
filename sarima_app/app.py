@@ -119,6 +119,18 @@ def compute_projection_yearly(real_series: pd.Series, pred_df: pd.DataFrame, cut
             rows.append({"Année": year, "Réel cumulé": real_cum, "Prévision cumulée": proj_cum, "Écart abs": abs_gap, "Écart rel %": rel_gap, "Mois couverts": covered})
     return pd.DataFrame(rows)
 
+def compute_break_indicators(real_series: pd.Series) -> dict:
+    s = real_series.dropna()
+    if len(s) < 24:
+        return {"mean_shift": 0.0, "vol_shift": 0.0, "max_mom": 0.0}
+    last12 = s.iloc[-12:]
+    prev12 = s.iloc[-24:-12]
+    mean_shift = 0.0 if prev12.mean() == 0 else (last12.mean() - prev12.mean()) / abs(prev12.mean()) * 100
+    vol_shift = 0.0 if prev12.std() == 0 else (last12.std() - prev12.std()) / abs(prev12.std()) * 100
+    mom = s.pct_change().replace([pd.NA, pd.NaT, float("inf"), float("-inf")], 0).fillna(0)
+    return {"mean_shift": float(mean_shift), "vol_shift": float(vol_shift), "max_mom": float(mom.abs().max() * 100)}
+
+
 with st.sidebar:
     st.header("Configuration")
     uploaded = st.file_uploader("Importer un CSV", type=["csv"])
@@ -169,10 +181,23 @@ if not fit.success:
     st.error(fit.message)
     st.stop()
 
+# Modèle de référence "historique" fixe: entraîné sur toute la série connue,
+# pour que la prévision passée ne bouge pas quand on déplace le cutoff.
+fixed_forecaster = SarimaForecaster(valid_series)
+fixed_fit = fixed_forecaster.fit((p, d, q), (P, D, Q, 12))
+if not fixed_fit.success:
+    st.error(f"Échec modèle historique fixe: {fixed_fit.message}")
+    st.stop()
+
 pred_df = forecaster.forecast(fit.model_fit, start_date=cutoff + pd.offsets.MonthBegin(1), horizon=horizon)
-in_sample = fit.model_fit.get_prediction(start=train.index[0], end=train.index[-1]).predicted_mean
-insample_df = pd.DataFrame({"date": in_sample.index, "value": in_sample.values})
-all_pred = pd.concat([insample_df, pred_df[["date", "value"]]], ignore_index=True)
+fixed_in_sample = fixed_fit.model_fit.get_prediction(start=valid_series.index[0], end=valid_series.index[-1]).predicted_mean
+fixed_insample_df = pd.DataFrame({"date": fixed_in_sample.index, "value": fixed_in_sample.values})
+
+# Courbe prévision affichée: historique fixe + futur scénario cutoff.
+# Important: on supprime les doublons de dates (la partie future peut chevaucher l'in-sample),
+# en gardant la valeur la plus récente (scénario cutoff) pour éviter les zigzags/segments multiples.
+all_pred = pd.concat([fixed_insample_df, pred_df[["date", "value"]]], ignore_index=True)
+all_pred = all_pred.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
 
 agg = agg_map[aggregation_mode]
 real_pre_ag = aggregate_by_period(pd.DataFrame({"date": train.index, "value": train.values}), agg)
@@ -210,6 +235,19 @@ st.markdown(
 - Saisonnière estimée : <b>{'forte' if seasonality_ratio > 0.35 else 'modérée' if seasonality_ratio > 0.15 else 'faible'}</b> (ratio saisonnalité ≈ {seasonality_ratio:.2f}).<br>
 - Volatilité relative : <b>{'élevée' if volatility_ratio > 0.6 else 'moyenne' if volatility_ratio > 0.25 else 'faible'}</b> (écart-type / moyenne ≈ {volatility_ratio:.2f}).<br>
 - {ll_note}
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+brk = compute_break_indicators(valid_series)
+st.markdown(
+    f"""
+<div class='note'>
+<b>Indicateurs de rupture (12 derniers mois vs 12 précédents)</b><br>
+- Changement de niveau moyen: <b>{brk['mean_shift']:+.1f}%</b> {'⚠️' if abs(brk['mean_shift']) > 25 else ''}<br>
+- Changement de volatilité: <b>{brk['vol_shift']:+.1f}%</b> {'⚠️' if abs(brk['vol_shift']) > 30 else ''}<br>
+- Plus forte variation mensuelle: <b>{brk['max_mom']:.1f}%</b>
 </div>
 """,
     unsafe_allow_html=True,
@@ -266,6 +304,28 @@ if st.session_state.get("grid_top"):
     st.dataframe(top_df, use_container_width=True)
     best = st.session_state["grid_top"][0]
     st.success(f"Meilleur modèle: (p,d,q)=({best['p']},{best['d']},{best['q']}), (P,D,Q)=({best['P']},{best['D']},{best['Q']})")
+
+    # Signaux simples d'overfit du grid
+    boundary_hits = []
+    for k, lo, hi in [("p", 0, 5), ("d", 0, 2), ("q", 0, 5), ("P", 0, 3), ("D", 0, 2), ("Q", 0, 3)]:
+        if best[k] in {lo, hi}:
+            boundary_hits.append(k)
+    spread = None
+    if len(top_df) >= 5:
+        spread = float(top_df.iloc[4]["score"] - top_df.iloc[0]["score"])
+
+    st.markdown(
+        f"""
+<div class='note'>
+<b>Lecture du grid search :</b><br>
+- Paramètres en borne: <b>{', '.join(boundary_hits) if boundary_hits else 'aucun'}</b> {'⚠️ (risque de grille trop étroite ou overfit)' if boundary_hits else ''}<br>
+- Écart score top1→top5: <b>{(f'{spread:.3f}' if spread is not None else 'n/a')}</b> {('(faible écart: plusieurs modèles équivalents)' if spread is not None and spread < 1 else '')}<br>
+- Conseil: valider le meilleur modèle sur une année non optimisée (ex: optimiser 2024, contrôler 2025).
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
     if st.button("Appliquer les meilleurs paramètres"):
         st.session_state["pending_best_params"] = best
         st.rerun()
