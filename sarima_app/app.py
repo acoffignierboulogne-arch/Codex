@@ -119,16 +119,72 @@ def compute_projection_yearly(real_series: pd.Series, pred_df: pd.DataFrame, cut
             rows.append({"Année": year, "Réel cumulé": real_cum, "Prévision cumulée": proj_cum, "Écart abs": abs_gap, "Écart rel %": rel_gap, "Mois couverts": covered})
     return pd.DataFrame(rows)
 
+def _pct_change_safe(current: float, previous: float, eps: float = 1e-9) -> float:
+    """Calcule une variation % robuste quand la base précédente est quasi nulle."""
+    if abs(previous) <= eps:
+        if abs(current) <= eps:
+            return 0.0
+        return 100.0
+    return (current - previous) / abs(previous) * 100
+
+
 def compute_break_indicators(real_series: pd.Series) -> dict:
-    s = real_series.dropna()
+    s = real_series.dropna().sort_index()
     if len(s) < 24:
-        return {"mean_shift": 0.0, "vol_shift": 0.0, "max_mom": 0.0}
-    last12 = s.iloc[-12:]
-    prev12 = s.iloc[-24:-12]
-    mean_shift = 0.0 if prev12.mean() == 0 else (last12.mean() - prev12.mean()) / abs(prev12.mean()) * 100
-    vol_shift = 0.0 if prev12.std() == 0 else (last12.std() - prev12.std()) / abs(prev12.std()) * 100
-    mom = s.pct_change().replace([pd.NA, pd.NaT, float("inf"), float("-inf")], 0).fillna(0)
-    return {"mean_shift": float(mean_shift), "vol_shift": float(vol_shift), "max_mom": float(mom.abs().max() * 100)}
+        return {"latest": None, "windows": [], "max_mom_pct": 0.0, "max_mom_abs": 0.0, "suspected_change_month": None}
+
+    windows = []
+    total_pairs = len(s) // 12 - 1
+    # Comparaisons glissantes: (N-11..N) vs (N-23..N-12), puis fenêtre précédente, etc.
+    for pair_idx in range(total_pairs):
+        end_idx = len(s) - pair_idx * 12
+        curr = s.iloc[end_idx - 12:end_idx]
+        prev = s.iloc[end_idx - 24:end_idx - 12]
+        if len(curr) < 12 or len(prev) < 12:
+            continue
+
+        curr_mean = float(curr.mean())
+        prev_mean = float(prev.mean())
+        curr_std = float(curr.std(ddof=0))
+        prev_std = float(prev.std(ddof=0))
+        mean_shift = _pct_change_safe(curr_mean, prev_mean)
+        vol_shift = _pct_change_safe(curr_std, prev_std)
+        windows.append(
+            {
+                "pair_index": pair_idx,
+                "curr_start": curr.index.min(),
+                "curr_end": curr.index.max(),
+                "prev_start": prev.index.min(),
+                "prev_end": prev.index.max(),
+                "mean_shift": mean_shift,
+                "vol_shift": vol_shift,
+                "curr_mean": curr_mean,
+                "prev_mean": prev_mean,
+            }
+        )
+
+    # Variation mensuelle: cap robuste pour éviter les pourcentages absurdes si mois précédent ≈ 0.
+    prev_vals = s.shift(1)
+    safe_denom = prev_vals.abs().clip(lower=max(1.0, float(s.abs().quantile(0.05))))
+    mom_pct = ((s - prev_vals) / safe_denom * 100).replace([pd.NA, pd.NaT, float("inf"), float("-inf")], 0).fillna(0)
+    max_mom_pct = float(mom_pct.abs().max())
+    max_mom_abs = float(s.diff().abs().max())
+
+    # Détection simple d'un mois probable de rupture via variation forte de moyenne roulante 12m.
+    rolling_mean = s.rolling(12).mean()
+    rolling_delta = rolling_mean.diff().abs()
+    suspected_month = None
+    if rolling_delta.notna().any():
+        suspected_month = rolling_delta.idxmax()
+
+    latest = windows[0] if windows else None
+    return {
+        "latest": latest,
+        "windows": windows,
+        "max_mom_pct": max_mom_pct,
+        "max_mom_abs": max_mom_abs,
+        "suspected_change_month": suspected_month,
+    }
 
 
 with st.sidebar:
@@ -241,17 +297,52 @@ st.markdown(
 )
 
 brk = compute_break_indicators(valid_series)
-st.markdown(
-    f"""
+latest = brk["latest"]
+if latest is not None:
+    period_prev = f"{latest['prev_start'].strftime('%m/%Y')} → {latest['prev_end'].strftime('%m/%Y')}"
+    period_curr = f"{latest['curr_start'].strftime('%m/%Y')} → {latest['curr_end'].strftime('%m/%Y')}"
+    st.markdown(
+        f"""
 <div class='note'>
-<b>Indicateurs de rupture (12 derniers mois vs 12 précédents)</b><br>
-- Changement de niveau moyen: <b>{brk['mean_shift']:+.1f}%</b> {'⚠️' if abs(brk['mean_shift']) > 25 else ''}<br>
-- Changement de volatilité: <b>{brk['vol_shift']:+.1f}%</b> {'⚠️' if abs(brk['vol_shift']) > 30 else ''}<br>
-- Plus forte variation mensuelle: <b>{brk['max_mom']:.1f}%</b>
+<b>Indicateurs de rupture (12 mois glissants)</b><br>
+Comparaison la plus récente: <b>{period_curr}</b> vs <b>{period_prev}</b><br>
+- Changement de niveau moyen: <b>{latest['mean_shift']:+.1f}%</b> {'⚠️' if abs(latest['mean_shift']) > 25 else ''}<br>
+- Changement de volatilité: <b>{latest['vol_shift']:+.1f}%</b> {'⚠️' if abs(latest['vol_shift']) > 30 else ''}<br>
+- Plus forte variation mensuelle: <b>{brk['max_mom_pct']:.1f}%</b> (soit {fmt_euro(brk['max_mom_abs'])})<br>
+- Mois probable de changement de régime: <b>{brk['suspected_change_month'].strftime('%m/%Y') if brk['suspected_change_month'] is not None else 'n/a'}</b>
 </div>
 """,
-    unsafe_allow_html=True,
-)
+        unsafe_allow_html=True,
+    )
+
+    recap_rows = []
+    for row in brk["windows"]:
+        recap_rows.append(
+            {
+                "Période récente": f"{row['curr_start'].strftime('%m/%Y')} → {row['curr_end'].strftime('%m/%Y')}",
+                "Période comparée": f"{row['prev_start'].strftime('%m/%Y')} → {row['prev_end'].strftime('%m/%Y')}",
+                "Niveau moyen récente": row["curr_mean"],
+                "Niveau moyen comparée": row["prev_mean"],
+                "Δ niveau %": row["mean_shift"],
+                "Δ volatilité %": row["vol_shift"],
+                "Alerte": "⚠️" if (abs(row["mean_shift"]) > 25 or abs(row["vol_shift"]) > 30) else "",
+            }
+        )
+    recap_df = pd.DataFrame(recap_rows)
+    st.markdown("<p class='title'>Historique des ruptures (comparaisons 12 mois successives)</p>", unsafe_allow_html=True)
+    st.dataframe(
+        recap_df.style.format(
+            {
+                "Niveau moyen récente": fmt_euro,
+                "Niveau moyen comparée": fmt_euro,
+                "Δ niveau %": "{:+.1f}%",
+                "Δ volatilité %": "{:+.1f}%",
+            }
+        ),
+        use_container_width=True,
+    )
+else:
+    st.info("Pas assez de données pour calculer des indicateurs de rupture glissants (minimum 24 mois).")
 
 st.markdown("<p class='title'>Comparaison annuelle cumulée (années complètes)</p>", unsafe_allow_html=True)
 annual = annual_comparison(pd.DataFrame({"date": valid_series.index, "value": valid_series.values}), all_pred)
