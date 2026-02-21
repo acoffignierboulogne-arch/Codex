@@ -20,3 +20,11 @@ streamlit run app.py
 - `data_loader.py` : parsing robuste des fichiers CSV français.
 - `models.py` : encapsulation fit/prévision/grid search SARIMA.
 - `evaluation.py` : agrégation temporelle et évaluation annuelle.
+
+## Exécution depuis Spyder
+Ne lancez pas `app.py` avec `%runfile` (mode bare).
+Utilisez un terminal:
+```bash
+streamlit run app.py
+```
+Sinon, l'application quitte volontairement avec un message d'information.

@@ -1,17 +1,26 @@
 """Application Streamlit SARIMA avec UI orientée dashboard."""
 from __future__ import annotations
 
+import sys
 import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 from data_loader import load_csv
 from evaluation import aggregate_by_period, annual_comparison
 from models import SarimaForecaster
 
 st.set_page_config(page_title="SARIMA Dépenses", layout="wide")
+
+# Exécution sécurisée: si lancé depuis Spyder/%runfile (hors runtime Streamlit),
+# on affiche une consigne claire puis on quitte proprement pour éviter les faux crashes.
+if get_script_run_ctx() is None:
+    print("[INFO] Cette application doit être lancée avec Streamlit, pas avec %runfile.")
+    print("[INFO] Commande: streamlit run app.py")
+    sys.exit(0)
 
 st.markdown(
     """
@@ -46,6 +55,7 @@ with st.sidebar:
 loaded = cached_load(uploaded)
 st.info(loaded.message)
 if loaded.data.empty:
+    st.warning("Aucune donnée chargée. Importez un CSV dans la barre latérale.")
     st.stop()
 
 # Correction du crash Windows: forcer explicitement le type datetime avant asfreq.
@@ -54,8 +64,12 @@ df["date"] = pd.to_datetime(df["date"], errors="coerce")
 df = df.dropna(subset=["date", "value"]).sort_values("date")
 series = pd.Series(df["value"].values, index=pd.DatetimeIndex(df["date"]), name="value")
 series = series[~series.index.duplicated(keep="last")].asfreq("MS")
+valid_series = series.dropna()
+if valid_series.empty:
+    st.warning("Aucune observation mensuelle valide après parsing. Vérifiez le format des colonnes.")
+    st.stop()
 
-if len(series.dropna()) < 24:
+if len(valid_series) < 24:
     st.warning("Série trop courte: minimum 24 mois requis.")
     st.stop()
 
@@ -68,8 +82,8 @@ with st.sidebar:
     D = st.slider("D", 0, 2, 1)
     Q = st.slider("Q", 0, 3, 1)
 
-    min_cut = series.dropna().index[23]
-    max_cut = series.dropna().index[-1]
+    min_cut = valid_series.index[23]
+    max_cut = valid_series.index[-1]
     cutoff_value = st.slider(
         "Cutoff (dernier mois connu)",
         min_value=min_cut.to_pydatetime(),
@@ -121,7 +135,7 @@ m2.metric("BIC", f"{fit.bic:.2f}")
 m3.metric("Log-likelihood", f"{fit.llf:.2f}")
 
 st.markdown("<p class='title'>Comparaison annuelle cumulée</p>", unsafe_allow_html=True)
-annual = annual_comparison(pd.DataFrame({"date": series.dropna().index, "value": series.dropna().values}), all_pred)
+annual = annual_comparison(pd.DataFrame({"date": valid_series.index, "value": valid_series.values}), all_pred)
 if not annual.empty:
     styled = annual.style.format({"Σ Réel": fmt_euro, "Σ Prévu": fmt_euro, "Écart absolu": fmt_euro, "Écart relatif %": "{:.2f}%"}).apply(
         lambda row: ["background-color:#fff0f2" if row["Écart relatif %"] > 5 else "" for _ in row], axis=1
