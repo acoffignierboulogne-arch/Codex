@@ -36,3 +36,8 @@ ou un terminal classique:
 ```bash
 streamlit run app.py
 ```
+
+
+### Si des onglets s'ouvrent en boucle
+Le bootstrap Spyder est protégé contre la récursion (`SARIMA_STREAMLIT_CHILD=1`).
+Si vous aviez une ancienne session, fermez les anciens processus Python/Streamlit puis relancez une seule fois `%runfile app.py --wdir`.

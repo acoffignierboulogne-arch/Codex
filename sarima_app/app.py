@@ -18,8 +18,17 @@ def _is_probably_spyder() -> bool:
     return "spyder_kernels" in sys.modules
 
 
+def _is_streamlit_child_process() -> bool:
+    """Évite la récursion: ne pas relancer Streamlit depuis un process déjà lancé pour Streamlit."""
+    if os.environ.get("SARIMA_STREAMLIT_CHILD") == "1":
+        return True
+    # Sécurité supplémentaire selon l'entrypoint courant
+    argv0 = os.path.basename(sys.argv[0]).lower() if sys.argv else ""
+    return "streamlit" in argv0
+
+
 # Bootstrap Spyder: démarre Streamlit automatiquement pour ouvrir une URL locale.
-if __name__ == "__main__" and _is_probably_spyder():
+if __name__ == "__main__" and _is_probably_spyder() and not _is_streamlit_child_process():
     url = "http://127.0.0.1:8501"
     if importlib.util.find_spec("streamlit") is None:
         print("[ERREUR] Le module streamlit n'est pas installé dans cet environnement Python.")
@@ -42,7 +51,9 @@ if __name__ == "__main__" and _is_probably_spyder():
     print("[INFO] Lancement automatique Streamlit depuis Spyder...")
     print("[INFO] URL:", url)
     try:
-        subprocess.Popen(cmd)
+        child_env = os.environ.copy()
+        child_env["SARIMA_STREAMLIT_CHILD"] = "1"
+        subprocess.Popen(cmd, env=child_env)
         time.sleep(1.2)
         webbrowser.open(url)
         sys.exit(0)
