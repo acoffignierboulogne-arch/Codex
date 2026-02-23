@@ -111,6 +111,7 @@ class SarimaForecaster:
         max_combinations: int,
         progress_callback,
         eval_mode: str = "Année civile",
+        validation_mode: str = "Cutoff courant",
     ) -> list[dict]:
         p_vals = range(search_space["p_min"], search_space["p_max"] + 1)
         d_vals = range(search_space["d_min"], search_space["d_max"] + 1)
@@ -124,6 +125,41 @@ class SarimaForecaster:
         real_df = reference_series.dropna().reset_index()
         real_df.columns = ["date", "value"]
 
+        def score_single_split(fit_model, split_train: pd.Series, split_reference: pd.Series, years_to_score: list[int]) -> float | None:
+            in_sample = fit_model.get_prediction(start=split_train.index[0], end=split_train.index[-1]).predicted_mean
+            max_ref_date = split_reference.dropna().index.max()
+            horizon = max(1, (max_ref_date.to_period("M") - split_train.index[-1].to_period("M")).n)
+            forecast_df = SarimaForecaster.forecast(
+                fit_model,
+                start_date=split_train.index[-1] + pd.offsets.MonthBegin(1),
+                horizon=horizon,
+            )[["date", "value"]]
+            pred_df_local = pd.concat(
+                [
+                    pd.DataFrame({"date": in_sample.index, "value": in_sample.values}),
+                    forecast_df,
+                ],
+                ignore_index=True,
+            )
+
+            cutoff_local = pd.Timestamp(split_train.index.max()).replace(day=1)
+            if eval_mode == "R12":
+                rolling_scores = []
+                for _y, start, end in _rolling_year_windows(years_to_score, cutoff_local):
+                    one = _month_span_score(real_df, pred_df_local, start=start, end=end)
+                    if one is not None:
+                        rolling_scores.append(one)
+                if not rolling_scores:
+                    return None
+                return float(sum(rolling_scores))
+
+            comp = annual_comparison(real_df, pred_df_local)
+            comp = comp[comp["Année"].isin(years_to_score)]
+            if comp.empty:
+                return None
+            return float(comp["Écart relatif %"].abs().sum())
+
+
         for i, (p, d, q, P, D, Q) in enumerate(combos, start=1):
             progress_callback(i / max(len(combos), 1))
             fit = SarimaForecaster(train_series).fit((p, d, q), (P, D, Q, 12))
@@ -132,41 +168,31 @@ class SarimaForecaster:
 
             score = float(fit.aic)
             if criterion == "Écart annuel cumulé":
-                in_sample = fit.model_fit.get_prediction(start=train_series.index[0], end=train_series.index[-1]).predicted_mean
-                max_ref_date = reference_series.dropna().index.max()
-                horizon = max(1, (max_ref_date.to_period("M") - train_series.index[-1].to_period("M")).n)
-                forecast_df = SarimaForecaster.forecast(
-                    fit.model_fit,
-                    start_date=train_series.index[-1] + pd.offsets.MonthBegin(1),
-                    horizon=horizon,
-                )[["date", "value"]]
-                pred_df = pd.concat(
-                    [
-                        pd.DataFrame({"date": in_sample.index, "value": in_sample.values}),
-                        forecast_df,
-                    ],
-                    ignore_index=True,
-                )
+                target_years_list = sorted(int(y) for y in target_years)
+                if not target_years_list:
+                    continue
 
-                target_years_list = [int(y) for y in target_years]
-                cutoff = pd.Timestamp(train_series.index.max()).replace(day=1)
-
-                if eval_mode == "R12":
-                    rolling_scores = []
-                    for _y, start, end in _rolling_year_windows(target_years_list, cutoff):
-                        one = _month_span_score(real_df, pred_df, start=start, end=end)
+                if validation_mode == "Rolling origin":
+                    fold_scores = []
+                    for y in target_years_list:
+                        split_end = pd.Timestamp(year=y - 1, month=12, day=1)
+                        split_train = reference_series[reference_series.index <= split_end].dropna()
+                        if len(split_train) < 24:
+                            continue
+                        split_fit = SarimaForecaster(split_train).fit((p, d, q), (P, D, Q, 12))
+                        if not split_fit.success:
+                            continue
+                        one = score_single_split(split_fit.model_fit, split_train, reference_series, [y])
                         if one is not None:
-                            rolling_scores.append(one)
-                    if not rolling_scores:
+                            fold_scores.append(one)
+                    if not fold_scores:
                         continue
-                    score = float(sum(rolling_scores))
+                    score = float(sum(fold_scores) / len(fold_scores))
                 else:
-                    # Mode historique: comparaison sur années calendaires complètes.
-                    comp = annual_comparison(real_df, pred_df)
-                    comp = comp[comp["Année"].isin(target_years_list)]
-                    if comp.empty:
+                    one = score_single_split(fit.model_fit, train_series, reference_series, target_years_list)
+                    if one is None:
                         continue
-                    score = float(comp["Écart relatif %"].abs().sum())
+                    score = one
 
             results.append({"p": p, "d": d, "q": q, "P": P, "D": D, "Q": Q, "score": score, "aic": float(fit.aic)})
 

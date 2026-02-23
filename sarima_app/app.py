@@ -599,6 +599,8 @@ with st.expander("Configurer et lancer"):
     years = sorted({int(d.year) for d in valid_series.index if d.year >= 2019})
     target_years = st.multiselect("Années cibles", years, default=years[-2:] if len(years) >= 2 else years)
     criterion = st.selectbox("Critère", ["Écart annuel cumulé", "AIC"])
+    validation_mode = st.selectbox("Validation grid search", ["Cutoff courant", "Rolling origin"], index=0)
+    st.caption("Rolling origin: Train 2018→N-1 puis test sur N, moyenne des erreurs annuelles des années cochées.")
     st.caption("Mode cumul actif: 'Année civile' (années calendaires) ou 'R12' (fenêtres glissantes 12 mois alignées sur le cutoff).")
 
     total = (p_max-p_min+1)*(d_max-d_min+1)*(q_max-q_min+1)*(P_max-P_min+1)*(D_max-D_min+1)*(Q_max-Q_min+1)
@@ -616,6 +618,7 @@ with st.expander("Configurer et lancer"):
             max_combinations=int(max_combo),
             progress_callback=lambda v: bar.progress(min(1.0, v)),
             eval_mode=eval_mode,
+            validation_mode=validation_mode,
         )
         st.session_state["grid_top"] = top
 
