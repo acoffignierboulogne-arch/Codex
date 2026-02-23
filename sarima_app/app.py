@@ -199,15 +199,50 @@ if loaded.data.empty:
     st.warning("Aucune donnée chargée. Importez un CSV dans la barre latérale.")
     st.stop()
 
-df = loaded.data.copy()
-df["date"] = pd.to_datetime(df["date"], errors="coerce")
-df = df.dropna(subset=["date", "value"]).sort_values("date")
+raw_df = loaded.data.copy()
+raw_df["date"] = pd.to_datetime(raw_df["date"], errors="coerce")
+raw_df = raw_df.dropna(subset=["date", "value"]).sort_values("date")
+
+with st.sidebar:
+    st.subheader("Filtres du fichier budgétaire")
+    flux_options = sorted(raw_df["flux"].dropna().unique().tolist())
+    selected_flux = st.selectbox("Flux", flux_options, index=0)
+    scoped = raw_df[raw_df["flux"] == selected_flux]
+
+    def _multi_filter(label: str, col: str):
+        opts = sorted(scoped[col].dropna().astype(str).unique().tolist())
+        picked = st.multiselect(label, opts, default=opts)
+        return picked or opts
+
+    selected_titres = _multi_filter("Titre", "titre")
+    scoped = scoped[scoped["titre"].astype(str).isin(selected_titres)]
+    selected_chapitres = _multi_filter("Chapitre", "chapitre")
+    scoped = scoped[scoped["chapitre"].astype(str).isin(selected_chapitres)]
+    selected_comptes = _multi_filter("Compte exécution", "compte_execution")
+    scoped = scoped[scoped["compte_execution"].astype(str).isin(selected_comptes)]
+    selected_sous = _multi_filter("Sous compte", "sous_compte")
+    scoped = scoped[scoped["sous_compte"].astype(str).isin(selected_sous)]
+    selected_sous6 = _multi_filter("Sous-compte classe 6", "sous_compte_classe_6")
+    scoped = scoped[scoped["sous_compte_classe_6"].astype(str).isin(selected_sous6)]
+    selected_lib = _multi_filter("Libellé du type", "libelle_type")
+    scoped = scoped[scoped["libelle_type"].astype(str).isin(selected_lib)]
+
+if scoped.empty:
+    st.warning("Le filtrage courant ne retourne aucune ligne. Ajustez les filtres à gauche.")
+    st.stop()
+
+df = scoped.groupby("date", as_index=False)["value"].sum().sort_values("date")
 series = pd.Series(df["value"].values, index=pd.DatetimeIndex(df["date"]), name="value")
 series = series[~series.index.duplicated(keep="last")].asfreq("MS")
 valid_series = series.dropna()
 if len(valid_series) < 24:
-    st.warning("Série trop courte: minimum 24 mois requis.")
+    st.warning("Série trop courte après filtres: minimum 24 mois requis.")
     st.stop()
+
+st.caption(
+    f"Filtre actif — Flux: {selected_flux} | Titres: {len(selected_titres)} | Chapitres: {len(selected_chapitres)} | "
+    f"Comptes: {len(selected_comptes)} | Sous comptes: {len(selected_sous)}"
+)
 
 with st.sidebar:
     st.subheader("Paramètres SARIMA")
@@ -225,7 +260,11 @@ with st.sidebar:
     st.caption("Q (MA saisonnier): absorbe les chocs saisonniers récurrents.")
 
     min_cut = valid_series.index[23]
-    max_cut = valid_series.index[-1]
+    # Le cutoff doit aller jusqu'au dernier mois réellement présent dans les lignes filtrées
+    # (même si la série asfreq/dropna peut tronquer visuellement la fin).
+    max_cut = pd.Timestamp(scoped["date"].max()).replace(day=1)
+    if max_cut < min_cut:
+        max_cut = valid_series.index[-1]
     cutoff = pd.Timestamp(st.slider("Cutoff", min_value=min_cut.to_pydatetime(), max_value=max_cut.to_pydatetime(), value=max_cut.to_pydatetime(), format="MM/YYYY")).replace(day=1)
     horizon = st.slider("Horizon (mois)", 1, 36, 12)
 
@@ -284,12 +323,24 @@ ll_note = "Un log-likelihood négatif est fréquent sur des séries monétaires:
 if fit.llf is not None and fit.llf > 0:
     ll_note = "Log-likelihood positif: ajustement statistique global plutôt favorable."
 
+rolling_12 = valid_series.rolling(12).mean().dropna()
+trend_change = 0.0
+if len(rolling_12) >= 24:
+    trend_change = float((rolling_12.iloc[-1] - rolling_12.iloc[-12]) / max(abs(rolling_12.iloc[-12]), 1.0) * 100)
+
+yoy_change = 0.0
+if len(valid_series) >= 24:
+    yoy_change = float((valid_series.iloc[-1] - valid_series.iloc[-13]) / max(abs(valid_series.iloc[-13]), 1.0) * 100)
+
 st.markdown(
     f"""
 <div class='note'>
-<b>Lecture rapide de vos données :</b><br>
-- Saisonnière estimée : <b>{'forte' if seasonality_ratio > 0.35 else 'modérée' if seasonality_ratio > 0.15 else 'faible'}</b> (ratio saisonnalité ≈ {seasonality_ratio:.2f}).<br>
+<b>Lecture rapide de vos données (mise à jour avec vos filtres) :</b><br>
+- Série analysée: <b>{len(valid_series)} mois</b> de {valid_series.index.min().strftime('%m/%Y')} à {valid_series.index.max().strftime('%m/%Y')}<br>
+- Saisonnière estimée : <b>{'forte' if seasonality_ratio > 0.35 else 'modérée' if seasonality_ratio > 0.15 else 'faible'}</b> (ratio ≈ {seasonality_ratio:.2f}).<br>
 - Volatilité relative : <b>{'élevée' if volatility_ratio > 0.6 else 'moyenne' if volatility_ratio > 0.25 else 'faible'}</b> (écart-type / moyenne ≈ {volatility_ratio:.2f}).<br>
+- Tendance glissante 12 mois: <b>{trend_change:+.1f}%</b> {'(hausse durable)' if trend_change > 8 else '(baisse durable)' if trend_change < -8 else '(stable)'}<br>
+- Dernier mois vs même mois N-1: <b>{yoy_change:+.1f}%</b><br>
 - {ll_note}
 </div>
 """,
@@ -372,6 +423,7 @@ with st.expander("Configurer et lancer"):
     years = sorted({int(d.year) for d in valid_series.index if d.year >= 2019})
     target_years = st.multiselect("Années cibles", years, default=years[-2:] if len(years) >= 2 else years)
     criterion = st.selectbox("Critère", ["Écart annuel cumulé", "AIC"])
+    st.caption("Si l'année du cutoff (ex: 2025) est sélectionnée avec le critère 'Écart annuel cumulé', le score est calculé en année glissante 12 mois (ex: 04/2024→03/2025).")
 
     total = (p_max-p_min+1)*(d_max-d_min+1)*(q_max-q_min+1)*(P_max-P_min+1)*(D_max-D_min+1)*(Q_max-Q_min+1)
     st.write(f"Combinaisons: **{int(total)}**")

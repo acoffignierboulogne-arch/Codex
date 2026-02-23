@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import re
+import unicodedata
 from dataclasses import dataclass
 
 import pandas as pd
@@ -14,72 +15,42 @@ class LoadResult:
     message: str
 
 
-MONTH_MAP = {
-    "janv": 1,
-    "janvier": 1,
-    "fév": 2,
-    "fev": 2,
-    "février": 2,
-    "fevrier": 2,
-    "mars": 3,
-    "avr": 4,
-    "avril": 4,
-    "mai": 5,
-    "juin": 6,
-    "juil": 7,
-    "juillet": 7,
-    "août": 8,
-    "aout": 8,
-    "sept": 9,
-    "oct": 10,
-    "octobre": 10,
-    "nov": 11,
-    "novembre": 11,
-    "déc": 12,
-    "dec": 12,
-    "décembre": 12,
-    "decembre": 12,
-}
+def _fix_mojibake(text: str) -> str:
+    """Corrige quelques séquences d'encodage mal décodées fréquentes."""
+    replacements = {
+        "Ã©": "é",
+        "Ã¨": "è",
+        "Ãª": "ê",
+        "Ã«": "ë",
+        "Ã ": "à",
+        "Ã¹": "ù",
+        "Ã»": "û",
+        "Ã´": "ô",
+        "Ã®": "î",
+        "Ã¯": "ï",
+        "Ã§": "ç",
+        "Ã‰": "É",
+    }
+    out = text
+    for bad, good in replacements.items():
+        out = out.replace(bad, good)
+    return out
 
 
-def _parse_date(value: str) -> pd.Timestamp | None:
-    s = str(value).strip().lower()
-    patterns = [
-        r"^(\d{1,2})/(\d{4})$",                # MM/AAAA
-        r"^(\d{1,2})/(\d{1,2})/(\d{4})$",      # JJ/MM/AAAA
-        r"^(\d{4})[-/](\d{1,2})$",              # AAAA-MM
-        r"^(\d{4})-(\d{1,2})-(\d{1,2})$",      # AAAA-MM-JJ
-        r"^(\d{4})/(\d{1,2})/(\d{1,2})$",      # AAAA/MM/JJ
-    ]
-    m = re.match(patterns[0], s)
-    if m:
-        return pd.Timestamp(year=int(m.group(2)), month=int(m.group(1)), day=1)
-    m = re.match(patterns[1], s)
-    if m:
-        return pd.Timestamp(year=int(m.group(3)), month=int(m.group(2)), day=1)
-    m = re.match(patterns[2], s)
-    if m:
-        return pd.Timestamp(year=int(m.group(1)), month=int(m.group(2)), day=1)
-    m = re.match(patterns[3], s)
-    if m:
-        return pd.Timestamp(year=int(m.group(1)), month=int(m.group(2)), day=1)
-    m = re.match(patterns[4], s)
-    if m:
-        return pd.Timestamp(year=int(m.group(1)), month=int(m.group(2)), day=1)
-    m = re.match(r"^([a-zéûôîç\.]+)[-\s](\d{4})$", s)
-    if m:
-        month = MONTH_MAP.get(m.group(1).replace(".", ""))
-        if month:
-            return pd.Timestamp(year=int(m.group(2)), month=month, day=1)
-    # Fallback permissif: dayfirst=True pour formats français hors ISO explicites.
-    dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
-    if pd.isna(dt):
+def _slug(value: str) -> str:
+    s = _fix_mojibake(str(value)).strip().lower()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s
+
+
+def _parse_amount(value) -> float | None:
+    if pd.isna(value):
         return None
-    return pd.Timestamp(year=dt.year, month=dt.month, day=1)
-
-
-def _parse_amount(value: str) -> float | None:
     s = str(value).strip().replace("\u00a0", " ").replace(" ", "")
+    if not s:
+        return None
     s = s.replace(".", "").replace(",", ".")
     try:
         return float(s)
@@ -87,38 +58,144 @@ def _parse_amount(value: str) -> float | None:
         return None
 
 
+def _detect_separator(first_line: str) -> str:
+    return ";" if first_line.count(";") >= first_line.count(",") else ","
+
+
+def _canonical_columns(raw: pd.DataFrame) -> pd.DataFrame:
+    """Renomme les colonnes vers des noms canoniques robustes."""
+    alias_map = {
+        "exercice": "exercice",
+        "mois": "mois",
+        "date": "date",
+        "titre_depenses": "titre_depenses",
+        "titre_recettes": "titre_recettes",
+        "chapitre": "chapitre",
+        "compte_execution": "compte_execution",
+        "sous_compte": "sous_compte",
+        "sous_compte_classe_6": "sous_compte_classe_6",
+        "libelle_du_type": "libelle_type",
+        "libelle_type": "libelle_type",
+        "realise_depenses_cumul_realise_date_comptable": "montant_depenses",
+        "realise_recettes_cumul_realise_date_comptable": "montant_recettes",
+        # variantes sans accents / espaces
+        "realis_depenses_cumul_realise_date_comptable": "montant_depenses",
+        "realise_depenses_cumul_rea lise_date_comptable": "montant_depenses",
+    }
+    rename = {}
+    for col in raw.columns:
+        slug = _slug(col)
+        # correction spécifique de quelques slugs issus d'accents mal lus
+        slug = slug.replace("d_penses", "depenses").replace("r_alis", "realis")
+        slug = slug.replace("compte_ex_cution", "compte_execution")
+        slug = slug.replace("libell_du_type", "libelle_du_type")
+        canon = alias_map.get(slug)
+        if canon:
+            rename[col] = canon
+    return raw.rename(columns=rename)
+
+
+def _build_date_from_year_month(df: pd.DataFrame) -> pd.Series:
+    years = pd.to_numeric(df.get("exercice"), errors="coerce")
+    months = pd.to_numeric(df.get("mois"), errors="coerce")
+    return pd.to_datetime(
+        {"year": years, "month": months, "day": 1}, errors="coerce"
+    )
+
+
+def _build_flat_dataset(raw: pd.DataFrame) -> pd.DataFrame:
+    """Transforme le gros fichier budgétaire en format filtrable unique."""
+    df = _canonical_columns(raw.copy())
+
+    if "date" in df.columns:
+        dates = pd.to_datetime(df["date"], errors="coerce", dayfirst=True)
+        dates = pd.to_datetime(
+            {"year": dates.dt.year, "month": dates.dt.month, "day": 1}, errors="coerce"
+        )
+    elif {"exercice", "mois"}.issubset(df.columns):
+        dates = _build_date_from_year_month(df)
+    else:
+        return pd.DataFrame(columns=["date", "flux", "titre", "chapitre", "compte_execution", "sous_compte", "sous_compte_classe_6", "libelle_type", "value"])
+
+    base_cols = {
+        "chapitre": df.get("chapitre"),
+        "compte_execution": df.get("compte_execution"),
+        "sous_compte": df.get("sous_compte"),
+        "sous_compte_classe_6": df.get("sous_compte_classe_6"),
+        "libelle_type": df.get("libelle_type"),
+    }
+
+    dep = pd.DataFrame({
+        "date": dates,
+        "flux": "Dépenses",
+        "titre": df.get("titre_depenses"),
+        "value": df.get("montant_depenses"),
+        **base_cols,
+    })
+    rec = pd.DataFrame({
+        "date": dates,
+        "flux": "Recettes",
+        "titre": df.get("titre_recettes"),
+        "value": df.get("montant_recettes"),
+        **base_cols,
+    })
+
+    flat = pd.concat([dep, rec], ignore_index=True)
+    flat["value"] = flat["value"].map(_parse_amount)
+    for c in ["titre", "chapitre", "compte_execution", "sous_compte", "sous_compte_classe_6", "libelle_type"]:
+        flat[c] = flat[c].fillna("(vide)").astype(str).map(_fix_mojibake)
+    flat = flat.dropna(subset=["date", "value"])  # garder zéros
+    flat["date"] = pd.to_datetime(flat["date"], errors="coerce")
+    flat = flat.dropna(subset=["date"])
+    flat["date"] = pd.to_datetime({"year": flat["date"].dt.year, "month": flat["date"].dt.month, "day": 1})
+    return flat.sort_values("date").reset_index(drop=True)
+
+
 def load_csv(uploaded_file) -> LoadResult:
     if uploaded_file is None:
-        return LoadResult(pd.DataFrame(columns=["date", "value"]), "Aucun fichier.")
+        return LoadResult(pd.DataFrame(), "Aucun fichier.")
 
     content = uploaded_file.read()
-    for enc in ("utf-8-sig", "latin-1"):
+    text = None
+    for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
         try:
             text = content.decode(enc)
             break
         except UnicodeDecodeError:
-            text = None
+            continue
     if text is None:
-        return LoadResult(pd.DataFrame(columns=["date", "value"]), "Encodage non supporté.")
+        return LoadResult(pd.DataFrame(), "Encodage non supporté.")
 
-    first_line = text.splitlines()[0] if text.splitlines() else ""
-    sep = ";" if first_line.count(";") >= first_line.count(",") else ","
+    text = _fix_mojibake(text)
+    lines = text.splitlines()
+    first_line = lines[0] if lines else ""
+    sep = _detect_separator(first_line)
     raw = pd.read_csv(io.StringIO(text), sep=sep)
 
-    if raw.empty or raw.shape[1] < 2:
-        return LoadResult(pd.DataFrame(columns=["date", "value"]), "CSV vide ou invalide.")
+    if raw.empty:
+        return LoadResult(pd.DataFrame(), "CSV vide.")
 
-    rows = []
-    for _, row in raw.iloc[:, :2].iterrows():
-        date = _parse_date(row.iloc[0])
-        value = _parse_amount(row.iloc[1])
-        if date is not None and value is not None:
-            rows.append((date, value))
+    flat = _build_flat_dataset(raw)
+    if flat.empty:
+        # fallback ancien format 2 colonnes date/montant
+        rows = []
+        for _, row in raw.iloc[:, :2].iterrows():
+            date = pd.to_datetime(row.iloc[0], errors="coerce", dayfirst=True)
+            value = _parse_amount(row.iloc[1])
+            if pd.notna(date) and value is not None:
+                rows.append((pd.Timestamp(year=date.year, month=date.month, day=1), value))
+        if not rows:
+            return LoadResult(pd.DataFrame(), "Aucune ligne exploitable.")
+        df = pd.DataFrame(rows, columns=["date", "value"])
+        df = df.groupby("date", as_index=False)["value"].sum().sort_values("date")
+        df["flux"] = "Dépenses"
+        df["titre"] = "(global)"
+        df["chapitre"] = "(global)"
+        df["compte_execution"] = "(global)"
+        df["sous_compte"] = "(global)"
+        df["sous_compte_classe_6"] = "(global)"
+        df["libelle_type"] = "(global)"
+        return LoadResult(df, f"{len(df)} mois chargés (format simple).")
 
-    if not rows:
-        return LoadResult(pd.DataFrame(columns=["date", "value"]), "Aucune ligne exploitable.")
-
-    df = pd.DataFrame(rows, columns=["date", "value"])
-    df = df.drop_duplicates(subset=["date"], keep="last").sort_values("date")
-    df = df.groupby("date", as_index=False)["value"].sum()
-    return LoadResult(df, f"{len(df)} mois chargés.")
+    mois = flat["date"].dt.to_period("M").nunique()
+    return LoadResult(flat, f"{len(flat):,} lignes chargées, {mois} mois disponibles après normalisation.")

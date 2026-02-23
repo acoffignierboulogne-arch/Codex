@@ -13,6 +13,43 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 from evaluation import annual_comparison
 
 
+def _month_span_score(
+    real_df: pd.DataFrame,
+    pred_df: pd.DataFrame,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> float | None:
+    """Écart relatif cumulé sur une fenêtre mensuelle [start, end]."""
+    mask_real = (real_df["date"] >= start) & (real_df["date"] <= end)
+    mask_pred = (pred_df["date"] >= start) & (pred_df["date"] <= end)
+    real_slice = real_df.loc[mask_real, ["date", "value"]]
+    pred_slice = pred_df.loc[mask_pred, ["date", "value"]]
+    merged = real_slice.merge(pred_slice, on="date", how="inner", suffixes=("_real", "_pred"))
+    if len(merged) != 12:
+        return None
+    real_sum = float(merged["value_real"].sum())
+    pred_sum = float(merged["value_pred"].sum())
+    if abs(real_sum) <= 1e-9:
+        return 0.0 if abs(pred_sum) <= 1e-9 else None
+    return abs(pred_sum - real_sum) / abs(real_sum) * 100
+
+
+def _rolling_year_windows(target_years: Iterable[int], cutoff: pd.Timestamp) -> list[tuple[int, pd.Timestamp, pd.Timestamp]]:
+    """Construit des fenêtres glissantes de 12 mois alignées sur le mois du cutoff.
+
+    Ex: cutoff=03/2025 et année 2025 sélectionnée => fenêtre 04/2024..03/2025.
+    Pour 2024 => 04/2023..03/2024, etc.
+    """
+    windows: list[tuple[int, pd.Timestamp, pd.Timestamp]] = []
+    for year in sorted(set(int(y) for y in target_years)):
+        shift_years = cutoff.year - year
+        end = pd.Timestamp(year=cutoff.year - shift_years, month=cutoff.month, day=1)
+        start = end - pd.DateOffset(months=11)
+        windows.append((year, start, end))
+    return windows
+
+
+
 @dataclass
 class FitResult:
     success: bool
@@ -109,11 +146,28 @@ class SarimaForecaster:
                     ],
                     ignore_index=True,
                 )
-                comp = annual_comparison(real_df, pred_df)
-                comp = comp[comp["Année"].isin(target_years)]
-                if comp.empty:
-                    continue
-                score = float(comp["Écart relatif %"].abs().sum())
+
+                target_years_list = [int(y) for y in target_years]
+                cutoff = pd.Timestamp(train_series.index.max()).replace(day=1)
+
+                # Cas demandé: si l'année du cutoff est sélectionnée (ex. 2025 avec cutoff en mars 2025),
+                # on score en année glissante 12 mois alignée sur le cutoff.
+                if cutoff.year in target_years_list:
+                    rolling_scores = []
+                    for _y, start, end in _rolling_year_windows(target_years_list, cutoff):
+                        one = _month_span_score(real_df, pred_df, start=start, end=end)
+                        if one is not None:
+                            rolling_scores.append(one)
+                    if not rolling_scores:
+                        continue
+                    score = float(sum(rolling_scores))
+                else:
+                    # Comportement historique conservé: comparaison sur années calendaires complètes.
+                    comp = annual_comparison(real_df, pred_df)
+                    comp = comp[comp["Année"].isin(target_years_list)]
+                    if comp.empty:
+                        continue
+                    score = float(comp["Écart relatif %"].abs().sum())
 
             results.append({"p": p, "d": d, "q": q, "P": P, "D": D, "Q": Q, "score": score, "aic": float(fit.aic)})
 

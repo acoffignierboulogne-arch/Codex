@@ -48,6 +48,14 @@
       <h2>1) Import CSV</h2>
       <div id="dropzone" class="dropzone">Glissez-déposez un CSV ici ou <input id="fileInput" type="file" accept=".csv" /></div>
       <p id="importInfo" class="muted">Aucune donnée importée.</p>
+      <div class="controls"><label>Flux</label><select id="fluxFilter"><option>Dépenses</option><option>Recettes</option></select></div>
+      <div class="controls"><label>Titre</label><select id="titreFilter"></select></div>
+      <div class="controls"><label>Chapitre</label><select id="chapitreFilter"></select></div>
+      <div class="controls"><label>Compte exécution</label><select id="compteFilter"></select></div>
+      <div class="controls"><label>Sous compte</label><select id="sousFilter"></select></div>
+      <div class="controls"><label>Sous-compte classe 6</label><select id="sous6Filter"></select></div>
+      <div class="controls"><label>Libellé du type</label><select id="libelleFilter"></select></div>
+      <p id="filterInfo" class="muted">Filtres: tous</p>
       <div class="table-wrap"><table id="previewTable"></table></div>
     </div>
 
@@ -114,13 +122,105 @@
 <script>
 const frMonth = new Intl.DateTimeFormat('fr-FR', { month: 'short', year: 'numeric' });
 const frMoney = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-let parsed = [], chart = null, lastBest = null, gridRunning = false;
+let rawRows = [], parsed = [], chart = null, lastBest = null, gridRunning = false;
 
 function fmtMoney(v) { return `${frMoney.format(v || 0)} €`; }
 function monthLabel(d) { return frMonth.format(d).replace('.', ''); }
 function toMonthStart(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
 function dampedSum(phi, h){ return Math.abs(phi - 1) < 1e-9 ? h : (phi * (1 - Math.pow(phi, h)) / (1 - phi)); }
+
+function fixMojibake(str){
+  return String(str ?? '').replace(/Ã©/g,'é').replace(/Ã¨/g,'è').replace(/Ãª/g,'ê').replace(/Ã /g,'à').replace(/Ã§/g,'ç').replace(/Ã»/g,'û').replace(/Ã´/g,'ô').replace(/Ã‰/g,'É');
+}
+function normalizeLabel(str){ return fixMojibake(String(str ?? '')).trim(); }
+function slug(str){ return normalizeLabel(str).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''); }
+function monthFromYearMonth(y,m){ const yy=Number(y), mm=Number(m); if(!Number.isFinite(yy)||!Number.isFinite(mm)||mm<1||mm>12) return null; return new Date(yy,mm-1,1); }
+function detectColumns(cols){
+  const m={};
+  cols.forEach(c=>{ const k=slug(c); m[k]=c; });
+  return {
+    exercice:m.exercice, mois:m.mois, date:m.date,
+    titreDep:m.titre_depenses || m.titre_d_penses,
+    titreRec:m.titre_recettes,
+    chapitre:m.chapitre,
+    compte:m.compte_execution || m.compte_ex_cution,
+    sous:m.sous_compte,
+    sous6:m.sous_compte_classe_6 || m.sous_compte_classe6,
+    libelle:m.libelle_du_type || m.libelle_type || m.libell_du_type,
+    dep:m.realise_depenses_cumul_realise_date_comptable || m.realis_depenses_cumul_realise_date_comptable,
+    rec:m.realise_recettes_cumul_realise_date_comptable || m.realis_recettes_cumul_realise_date_comptable
+  };
+}
+function splitCSVLine(line, sep){
+  const out=[]; let cur='', q=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch==='"') { q=!q; continue; }
+    if(ch===sep && !q){ out.push(cur); cur=''; continue; }
+    cur+=ch;
+  }
+  out.push(cur); return out;
+}
+function parseCSVRaw(text){
+  const lines=text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean); if(!lines.length) return [];
+  const sep=(lines[0].split(';').length>=lines[0].split(',').length)?';':',';
+  const headers=splitCSVLine(lines[0],sep).map(normalizeLabel);
+  const map=detectColumns(headers);
+  const rows=[];
+  for(let i=1;i<lines.length;i++){
+    const vals=splitCSVLine(lines[i],sep); if(vals.length<2) continue;
+    const obj={}; headers.forEach((h,idx)=>obj[h]=vals[idx]);
+    let date=null;
+    if(map.date && obj[map.date]!==undefined) date=parseFrenchDate(obj[map.date]);
+    else if(map.exercice && map.mois) date=monthFromYearMonth(obj[map.exercice],obj[map.mois]);
+    if(!date) continue;
+    const base={date:toMonthStart(date), chapitre:normalizeLabel(obj[map.chapitre]||'(vide)'), compte:normalizeLabel(obj[map.compte]||'(vide)'), sous:normalizeLabel(obj[map.sous]||'(vide)'), sous6:normalizeLabel(obj[map.sous6]||'(vide)'), libelle:normalizeLabel(obj[map.libelle]||'(vide)')};
+    const depVal=parseAmount(obj[map.dep]); if(depVal!==null) rows.push({...base, flux:'Dépenses', titre:normalizeLabel(obj[map.titreDep]||'(vide)'), value:depVal});
+    const recVal=parseAmount(obj[map.rec]); if(recVal!==null) rows.push({...base, flux:'Recettes', titre:normalizeLabel(obj[map.titreRec]||'(vide)'), value:recVal});
+    if(!map.dep && !map.rec && i===1){ const d=parseFrenchDate(vals[0]); const v=parseAmount(vals[1]); if(d&&v!==null) rows.push({date:toMonthStart(d), flux:'Dépenses', titre:'(global)', chapitre:'(global)', compte:'(global)', sous:'(global)', sous6:'(global)', libelle:'(global)', value:v}); }
+  }
+  return rows;
+}
+function fillSelect(select, values){
+  const opts=['__ALL__', ...values];
+  select.innerHTML = opts.map(v=>`<option value="${v}">${v==='__ALL__'?'Tous':v}</option>`).join('');
+}
+function initFilters(){
+  const fluxSel=document.getElementById('fluxFilter');
+  const titreSel=document.getElementById('titreFilter'); const chSel=document.getElementById('chapitreFilter');
+  const coSel=document.getElementById('compteFilter'); const sSel=document.getElementById('sousFilter'); const s6Sel=document.getElementById('sous6Filter'); const lSel=document.getElementById('libelleFilter');
+  const scoped=rawRows.filter(r=>r.flux===fluxSel.value);
+  fillSelect(titreSel,[...new Set(scoped.map(r=>r.titre))].sort());
+  fillSelect(chSel,[...new Set(scoped.map(r=>r.chapitre))].sort());
+  fillSelect(coSel,[...new Set(scoped.map(r=>r.compte))].sort());
+  fillSelect(sSel,[...new Set(scoped.map(r=>r.sous))].sort());
+  fillSelect(s6Sel,[...new Set(scoped.map(r=>r.sous6))].sort());
+  fillSelect(lSel,[...new Set(scoped.map(r=>r.libelle))].sort());
+}
+function applyFilters(){
+  const flux=document.getElementById('fluxFilter').value;
+  const titre=document.getElementById('titreFilter').value;
+  const chap=document.getElementById('chapitreFilter').value;
+  const compte=document.getElementById('compteFilter').value;
+  const sous=document.getElementById('sousFilter').value;
+  const sous6=document.getElementById('sous6Filter').value;
+  const lib=document.getElementById('libelleFilter').value;
+  const filtered=rawRows.filter(r=>
+    r.flux===flux &&
+    (titre==='__ALL__' || r.titre===titre) &&
+    (chap==='__ALL__' || r.chapitre===chap) &&
+    (compte==='__ALL__' || r.compte===compte) &&
+    (sous==='__ALL__' || r.sous===sous) &&
+    (sous6==='__ALL__' || r.sous6===sous6) &&
+    (lib==='__ALL__' || r.libelle===lib)
+  );
+  const dedup = new Map();
+  filtered.forEach(r=>{ const k=r.date.toISOString().slice(0,7); dedup.set(k,(dedup.get(k)||0)+r.value);});
+  parsed=[...dedup.entries()].map(([k,v])=>({date:new Date(k+'-01'), value:v})).sort((a,b)=>a.date-b.date);
+  const fi=document.getElementById('filterInfo');
+  fi.textContent=`Filtre actif: ${flux} | ${titre==='__ALL__'?'Tous titres':titre} | ${chap==='__ALL__'?'Tous chapitres':chap}`;
+}
 
 function parseFrenchDate(raw) {
   const s = String(raw).trim().toLowerCase();
@@ -137,19 +237,6 @@ function parseFrenchDate(raw) {
 function parseAmount(raw) {
   const s = String(raw).trim().replace(/\s/g, '').replace(/\u00a0/g, '').replace(/\./g, '').replace(',', '.');
   const v = Number(s); return Number.isFinite(v) ? v : null;
-}
-
-function parseCSV(text){
-  const lines = text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
-  const sep = (lines[0].split(';').length >= lines[0].split(',').length) ? ';' : ',';
-  const rows=[];
-  for (const line of lines){
-    const cols = line.split(sep); if (cols.length < 2) continue;
-    const d = parseFrenchDate(cols[0]); const v = parseAmount(cols[1]);
-    if (d && v !== null) rows.push({date: toMonthStart(d), value:v});
-  }
-  const dedup = new Map(); rows.forEach(r=>dedup.set(r.date.toISOString().slice(0,7), r.value));
-  return [...dedup.entries()].map(([k,v])=>({date:new Date(k+'-01'), value:v})).sort((a,b)=>a.date-b.date);
 }
 
 function buildPreview(){
@@ -250,7 +337,10 @@ function buildProjectionTable(cutoffIdx, forecasts){
 }
 
 function recompute(){
-  if (parsed.length < 24) return;
+  if (parsed.length < 24){
+    if(parsed.length>0) importInfo.textContent += " | Série filtrée insuffisante (<24 mois).";
+    return;
+  }
   const alpha=+alphaEl.value, beta=+betaEl.value, gamma=+gammaEl.value, phi=+phiEl.value;
   const mode=modeEl.value, cutoffIdx=+cutoffEl.value, horizon=+horizonEl.value, agg=+aggregationEl.value;
   const hw = fitHoltWinters(parsed.slice(0, cutoffIdx+1), alpha,beta,gamma,phi,mode,horizon);
@@ -347,9 +437,11 @@ function loadFile(file){
   if(!file) return;
   const reader = new FileReader();
   reader.onload = () => {
-    parsed = parseCSV(reader.result);
+    rawRows = parseCSVRaw(reader.result);
+    initFilters();
+    applyFilters();
     buildPreview(); updateYearsForGrid();
-    cutoffEl.min=24; cutoffEl.max=parsed.length-1; cutoffEl.value=parsed.length-1;
+    cutoffEl.min=24; cutoffEl.max=Math.max(24, parsed.length-1); cutoffEl.value=Math.max(24, parsed.length-1);
     gridBtn.disabled = parsed.length < 24;
     recompute();
   };
@@ -360,6 +452,8 @@ fileInput.onchange = (e)=>loadFile(e.target.files[0]);
 ['dragenter','dragover'].forEach(evt=>dropzone.addEventListener(evt,(e)=>{e.preventDefault(); dropzone.classList.add('drag');}));
 ['dragleave','drop'].forEach(evt=>dropzone.addEventListener(evt,(e)=>{e.preventDefault(); dropzone.classList.remove('drag');}));
 dropzone.addEventListener('drop', (e)=>loadFile(e.dataTransfer.files[0]));
+
+["fluxFilter","titreFilter","chapitreFilter","compteFilter","sousFilter","sous6Filter","libelleFilter"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{ if(id==="fluxFilter") initFilters(); applyFilters(); buildPreview(); updateYearsForGrid(); cutoffEl.max=Math.max(24, parsed.length-1); cutoffEl.value=Math.min(+cutoffEl.value, +cutoffEl.max); gridBtn.disabled = parsed.length < 24; recompute(); }));
 
 syncPair(alphaEl, alphaNum, recompute); syncPair(betaEl, betaNum, recompute); syncPair(gammaEl, gammaNum, recompute); syncPair(phiEl, phiNum, recompute); syncPair(horizonEl, horizonNum, recompute);
 cutoffEl.addEventListener('input', recompute); modeEl.addEventListener('change', recompute); aggregationEl.addEventListener('change', recompute);
