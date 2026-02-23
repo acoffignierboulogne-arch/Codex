@@ -103,6 +103,7 @@
         <div class="controls"><label>β min/max/pas</label><span><input id="bMin" type="number" step="0.01" value="0.05"> <input id="bMax" type="number" step="0.01" value="0.5"> <input id="bStep" type="number" step="0.01" value="0.05"></span></div>
         <div class="controls"><label>γ min/max/pas</label><span><input id="gMin" type="number" step="0.01" value="0.05"> <input id="gMax" type="number" step="0.01" value="0.5"> <input id="gStep" type="number" step="0.01" value="0.05"></span></div>
         <div id="yearsChecks" class="muted">Années cibles: importez des données</div><div class="controls"><label>Validation</label><select id="validationMode"><option value="current">Cutoff courant</option><option value="rolling">Rolling origin</option></select></div>
+        <div class="controls"><label>Erreur cible (rolling)</label><select id="rollingMetric"><option value="monthly">Erreur mensuelle</option><option value="r12">Erreur R12</option><option value="annual">Erreur Total annuel (YTD + reste)</option></select></div>
         <div class="progress"><div id="progressBar"></div></div>
         <p id="gridResult" class="muted">Aucun calcul.</p>
         <button id="gridBtn" disabled>Lancer le Grid Search</button>
@@ -336,6 +337,127 @@ function computeR12(realMap, predMap, cutoffDate){
   return rows;
 }
 
+
+function mean(arr){ return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : NaN; }
+function mae(actual,pred){ if(!actual.length) return NaN; return actual.reduce((s,v,i)=>s+Math.abs(v-pred[i]),0)/actual.length; }
+function rmse(actual,pred){ if(!actual.length) return NaN; return Math.sqrt(actual.reduce((s,v,i)=>s+Math.pow(v-pred[i],2),0)/actual.length); }
+function mape(actual,pred){
+  const vals=[];
+  for(let i=0;i<actual.length;i++){
+    const den=Math.abs(actual[i]);
+    if(den>1e-9) vals.push(Math.abs((actual[i]-pred[i])/den)*100);
+  }
+  return vals.length?mean(vals):NaN;
+}
+function smape(actual,pred){
+  const vals=[];
+  for(let i=0;i<actual.length;i++){
+    const den=Math.abs(actual[i])+Math.abs(pred[i]);
+    if(den>1e-9) vals.push((2*Math.abs(actual[i]-pred[i])/den)*100);
+  }
+  return vals.length?mean(vals):NaN;
+}
+
+function addMetricBucket(target, actual, pred){
+  if(!Number.isFinite(actual) || !Number.isFinite(pred)) return;
+  target.actual.push(actual); target.pred.push(pred);
+}
+
+function makeMonthKey(d){ return d.toISOString().slice(0,7); }
+
+function rollingOriginBacktestMetrics(series, params, maxOrigins=36){
+  const {alpha,beta,gamma,phi,mode}=params;
+  const horizon=12;
+  const minTrain=24;
+  const folds=[];
+  const lastOrigin=series.length-2;
+  const firstOrigin=minTrain-1;
+  if(lastOrigin<firstOrigin) return {folds:[], monthlyByH:new Map(), monthlyAll:{actual:[],pred:[]}, r12All:{actual:[],pred:[]}, annualAll:{actual:[],pred:[]}, annualByMonth:Array.from({length:12},()=>({actual:[],pred:[]}))};
+  const candidates=[];
+  for(let t=firstOrigin;t<=lastOrigin;t++) candidates.push(t);
+  const origins=candidates.slice(Math.max(0,candidates.length-maxOrigins));
+
+  const monthlyByH=new Map(Array.from({length:horizon},(_,i)=>[i+1,{actual:[],pred:[]}]));
+  const monthlyAll={actual:[],pred:[]};
+  const r12All={actual:[],pred:[]};
+  const annualAll={actual:[],pred:[]};
+  const annualByMonth=Array.from({length:12},()=>({actual:[],pred:[]}));
+
+  const realMap={};
+  series.forEach(r=>{ realMap[makeMonthKey(r.date)] = r.value; });
+
+  for(const originIdx of origins){
+    const train=series.slice(0,originIdx+1);
+    const fcHorizon=Math.min(horizon, series.length-originIdx-1);
+    if(fcHorizon<1) continue;
+    const fit=fitHoltWinters(train,alpha,beta,gamma,phi,mode,horizon);
+    if(!fit) continue;
+
+    const foldPredMap={};
+    for(let h=1; h<=fcHorizon; h++) foldPredMap[makeMonthKey(addMonths(series[originIdx].date,h))]=fit.forecasts[h-1];
+
+    for(let h=1; h<=fcHorizon; h++){
+      const dt=addMonths(series[originIdx].date,h);
+      const key=makeMonthKey(dt);
+      const actual=realMap[key], pred=foldPredMap[key];
+      if(Number.isFinite(actual) && Number.isFinite(pred)){
+        addMetricBucket(monthlyByH.get(h), actual, pred);
+        addMetricBucket(monthlyAll, actual, pred);
+      }
+
+      const start=addMonths(dt,-11);
+      let r12A=0, r12P=0, ok=true;
+      for(let i=0;i<12;i++){
+        const mdt=addMonths(start,i);
+        const mkey=makeMonthKey(mdt);
+        const areal=realMap[mkey];
+        if(!Number.isFinite(areal)){ ok=false; break; }
+        r12A+=areal;
+        let pval;
+        if(mdt<=series[originIdx].date){
+          pval=areal;
+        } else {
+          pval=foldPredMap[mkey];
+        }
+        if(!Number.isFinite(pval)){ ok=false; break; }
+        r12P+=pval;
+      }
+      if(ok) addMetricBucket(r12All,r12A,r12P);
+    }
+
+    const originDate=series[originIdx].date;
+    const y=originDate.getFullYear();
+    let yearReal=0, ytdReal=0, remPred=0, hasYear=true, hasPred=true;
+    for(let m=0;m<12;m++){
+      const dt=new Date(y,m,1);
+      const key=makeMonthKey(dt);
+      const rv=realMap[key];
+      if(!Number.isFinite(rv)){ hasYear=false; break; }
+      yearReal+=rv;
+      if(m<=originDate.getMonth()) ytdReal+=rv;
+      else {
+        const pv=foldPredMap[key];
+        if(!Number.isFinite(pv)){ hasPred=false; break; }
+        remPred+=pv;
+      }
+    }
+    if(hasYear && hasPred){
+      const annualPred=ytdReal+remPred;
+      addMetricBucket(annualAll, yearReal, annualPred);
+      addMetricBucket(annualByMonth[originDate.getMonth()], yearReal, annualPred);
+      folds.push({originDate, year, annualReal:yearReal, annualPred});
+    }
+  }
+
+  return {folds, monthlyByH, monthlyAll, r12All, annualAll, annualByMonth};
+}
+
+function summarizeMetricBucket(bucket){
+  const actual=bucket.actual, pred=bucket.pred;
+  if(!actual.length) return {count:0, mae:NaN, rmse:NaN, mape:NaN, smape:NaN};
+  return {count:actual.length, mae:mae(actual,pred), rmse:rmse(actual,pred), mape:mape(actual,pred), smape:smape(actual,pred)};
+}
+
 function buildProjectionTable(cutoffIdx, forecasts){
   const horizon = forecasts.length;
   const end = addMonths(parsed[cutoffIdx].date, horizon);
@@ -425,7 +547,7 @@ function buildBudgetCompareTable(predMap, cutoffDate){
     if(covered===0) return null;
     return {y, real, ini, model};
   }).filter(Boolean);
-  budgetCompareTable.innerHTML='<tr><th>Année</th><th>Σ Réel</th><th>Σ Budget primitif saisonnalisé</th><th>Σ Prévision modèle</th></tr>' + rows.map(r=>`<tr><td>${r.y}</td><td>${fmtMoney(r.real)}</td><td>${fmtMoney(r.ini)}</td><td><td>${fmtMoney(r.model)}</td></tr>`).join('');
+  budgetCompareTable.innerHTML='<tr><th>Année</th><th>Σ Réel</th><th>Σ Budget primitif saisonnalisé</th><th>Σ Prévision modèle</th></tr>' + rows.map(r=>`<tr><td>${r.y}</td><td>${fmtMoney(r.real)}</td><td>${fmtMoney(r.ini)}</td><td>${fmtMoney(r.model)}</td></tr>`).join('');
 }
 
 
@@ -519,6 +641,7 @@ async function runGrid(){
   const total = as.length*bs.length*gs.length; if(!total){ gridResult.textContent='Paramètres de grille invalides.'; return; }
 
   const cutoffIdx=+cutoffEl.value, mode=modeEl.value, phi=+phiEl.value, fitSeries=parsed.slice(0,cutoffIdx+1), monthsAfterCutoff=Math.max(1, parsed.length-cutoffIdx-1), validationMode=validationModeEl.value;
+  const rollingMetric=rollingMetricEl.value;
   const realMap={}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
   gridRunning=true; gridBtn.disabled=true; progressBar.style.width='0%'; top5.innerHTML=''; gridResult.textContent=`Calcul en cours (${total} combinaisons)...`;
 
@@ -526,45 +649,55 @@ async function runGrid(){
   for(const a of as){ for(const b of bs){ for(const g of gs){
     const hw=fitHoltWinters(fitSeries,a,b,g,phi,mode,monthsAfterCutoff);
     if(hw){
-      const scoreYears=[];
+      let score=Infinity, scoreCount=0, diagnostic='';
+      let annualByMonthTable='';
       if(validationMode==='rolling'){
-        for(const ys of checks){
-          const y=+ys;
-          const trainEndIdx = parsed.findIndex(r=>r.date.getFullYear()===y && r.date.getMonth()===0) - 1;
-          if(trainEndIdx < 24) continue;
-          const splitTrain = parsed.slice(0, trainEndIdx+1);
-          const split = fitHoltWinters(splitTrain,a,b,g,phi,mode,12);
-          if(!split) continue;
-          const splitPredMap={};
-          for(let h=1; h<=12; h++) splitPredMap[new Date(y,h-1,1).toISOString().slice(0,7)] = split.forecasts[h-1];
-          const yKeys = Object.keys(realMap).filter(k=>k.startsWith(y+'-'));
-          const both = yKeys.filter(k=>splitPredMap[k]!==undefined && realMap[k]!==undefined);
-          if(both.length!==12) continue;
-          const r=both.reduce((x,k)=>x+realMap[k],0), p=both.reduce((x,k)=>x+splitPredMap[k],0), abs=Math.abs(r-p), rel=r===0?0:abs/Math.abs(r)*100;
-          scoreYears.push({year:y, rel});
-        }
+        const bt=rollingOriginBacktestMetrics(parsed,{alpha:a,beta:b,gamma:g,phi,mode},36);
+        const monthlySummary=summarizeMetricBucket(bt.monthlyAll);
+        const r12Summary=summarizeMetricBucket(bt.r12All);
+        const annualSummary=summarizeMetricBucket(bt.annualAll);
+        scoreCount = rollingMetric==='monthly' ? monthlySummary.count : (rollingMetric==='r12' ? r12Summary.count : annualSummary.count);
+        score = rollingMetric==='monthly' ? monthlySummary.rmse : (rollingMetric==='r12' ? r12Summary.rmse : annualSummary.rmse);
+
+        const monthRows = bt.annualByMonth.map((bkt,idx)=>{
+          const s=summarizeMetricBucket(bkt);
+          if(!s.count) return '';
+          const rel = Number.isFinite(s.mape) ? `${s.mape.toFixed(2)}%` : `${s.smape.toFixed(2)}% (sMAPE)`;
+          return `<tr><td>${idx+1}</td><td>${s.count}</td><td>${fmtMoney(s.mae)}</td><td>${rel}</td></tr>`;
+        }).filter(Boolean).join('');
+        annualByMonthTable = monthRows ? `<br><span class="muted">Erreur total annuel par mois d'origine (best):</span><table><tr><th>Mois origine</th><th>n</th><th>MAE total annuel</th><th>Erreur relative</th></tr>${monthRows}</table>` : '';
+        diagnostic = `rolling ${rollingMetric} | folds=${bt.folds.length}`;
       } else {
+        const scoreYears=[];
         const predMap={}; hw.fitted.forEach((v,i)=>{ if(v!=null) predMap[parsed[i].date.toISOString().slice(0,7)] = v; });
         for(let h=1; h<=monthsAfterCutoff; h++) predMap[addMonths(parsed[cutoffIdx].date,h).toISOString().slice(0,7)] = hw.forecasts[h-1];
         scoreYears.push(...(cumulModeEl.value==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap)).filter(r=>checks.includes(String(r.year))));
+        score=scoreYears.length ? scoreYears.reduce((x,r)=>x+r.rel,0) : Infinity;
+        scoreCount=scoreYears.length;
+        diagnostic = `cutoff courant | années=${scoreYears.length}`;
       }
-      // Garde-fous anti-overfit/explosion: on rejette les combinaisons instables.
+
       const trainVals = fitSeries.map(x=>x.value);
       const trainMean = trainVals.reduce((x,y)=>x+y,0)/Math.max(1,trainVals.length);
       const maxForecast = Math.max(...hw.forecasts);
       const minForecast = Math.min(...hw.forecasts);
       const absurdScale = maxForecast > trainMean * 8 || minForecast < -Math.abs(trainMean) * 2;
-      const perYearHuge = scoreYears.some(r=>r.rel > 120);
-      const score = scoreYears.length ? scoreYears.reduce((x,r)=>x+r.rel,0) : Infinity;
-      if (Number.isFinite(score) && !absurdScale && !perYearHuge) { top.push({a,b,g,score}); top.sort((x,y)=>x.score-y.score); if(top.length>5) top.pop(); }
+      if (Number.isFinite(score) && scoreCount>0 && !absurdScale) {
+        top.push({a,b,g,score,diagnostic,annualByMonthTable});
+        top.sort((x,y)=>x.score-y.score);
+        if(top.length>5) top.pop();
+      }
     }
     done++; progressBar.style.width=`${(100*done/total).toFixed(1)}%`;
   }} await new Promise(r=>setTimeout(r,0)); }
 
-  if (!top.length){ gridResult.textContent='Aucune combinaison valide pour les années sélectionnées.'; applyBest.disabled=true; }
+  if (!top.length){ gridResult.textContent='Aucune combinaison valide pour le mode/métrique sélectionné(e).'; applyBest.disabled=true; }
   else {
-    lastBest=top[0]; gridResult.textContent=`Meilleur: α=${lastBest.a}, β=${lastBest.b}, γ=${lastBest.g} | score cumulé=${lastBest.score.toFixed(3)}%`; applyBest.disabled=false;
-    top5.innerHTML='<tr><th>Rang</th><th>α</th><th>β</th><th>γ</th><th>Score cumulé</th></tr>'+top.map((r,i)=>`<tr><td>${i+1}</td><td>${r.a}</td><td>${r.b}</td><td>${r.g}</td><td>${r.score.toFixed(3)}%</td></tr>`).join('');
+    lastBest=top[0];
+    const scoreLabel = validationMode==='rolling' ? `score RMSE (${rollingMetric})` : 'score cumulé';
+    gridResult.innerHTML=`Meilleur: α=${lastBest.a}, β=${lastBest.b}, γ=${lastBest.g} | ${scoreLabel}=${lastBest.score.toFixed(3)}<br><span class="muted">${lastBest.diagnostic}</span>${lastBest.annualByMonthTable}`;
+    applyBest.disabled=false;
+    top5.innerHTML='<tr><th>Rang</th><th>α</th><th>β</th><th>γ</th><th>Score</th><th>Contexte</th></tr>'+top.map((r,i)=>`<tr><td>${i+1}</td><td>${r.a}</td><td>${r.b}</td><td>${r.g}</td><td>${r.score.toFixed(3)}</td><td>${r.diagnostic}</td></tr>`).join('');
   }
   gridRunning=false; gridBtn.disabled=parsed.length<24;
 }
@@ -576,7 +709,7 @@ const gammaEl=document.getElementById('gamma'), gammaNum=document.getElementById
 const phiEl=document.getElementById('phi'), phiNum=document.getElementById('phiNum');
 const horizonEl=document.getElementById('horizon'), horizonNum=document.getElementById('horizonNum');
 const cutoffEl=document.getElementById('cutoff'), cutoffText=document.getElementById('cutoffText');
-const modeEl=document.getElementById('mode'), aggregationEl=document.getElementById('aggregation'), cumulModeEl=document.getElementById('cumulMode'), validationModeEl=document.getElementById('validationMode');
+const modeEl=document.getElementById('mode'), aggregationEl=document.getElementById('aggregation'), cumulModeEl=document.getElementById('cumulMode'), validationModeEl=document.getElementById('validationMode'), rollingMetricEl=document.getElementById('rollingMetric');
 const gridBtn=document.getElementById('gridBtn'), applyBest=document.getElementById('applyBest');
 const perfTable=document.getElementById('perfTable'), projectionTable=document.getElementById('projectionTable'), budgetCompareTable=document.getElementById('budgetCompareTable'), hwInsights=document.getElementById('hwInsights');
 
@@ -609,7 +742,7 @@ dropzone.addEventListener('drop', (e)=>loadFile(e.dataTransfer.files[0]));
 ["fluxFilter","titreFilter","chapitreFilter","compteFilter","sousFilter","sous6Filter","libelleFilter"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{ if(id==="fluxFilter") initFilters(); applyFilters(); buildPreview(); updateYearsForGrid(); cutoffEl.max=Math.max(24, parsed.length-1); cutoffEl.value=Math.min(+cutoffEl.value, +cutoffEl.max); gridBtn.disabled = parsed.length < 24; recompute(); }));
 
 syncPair(alphaEl, alphaNum, recompute); syncPair(betaEl, betaNum, recompute); syncPair(gammaEl, gammaNum, recompute); syncPair(phiEl, phiNum, recompute); syncPair(horizonEl, horizonNum, recompute);
-cutoffEl.addEventListener('input', recompute); modeEl.addEventListener('change', recompute); aggregationEl.addEventListener('change', recompute); cumulModeEl.addEventListener('change', recompute); validationModeEl.addEventListener('change', recompute);
+cutoffEl.addEventListener('input', recompute); modeEl.addEventListener('change', recompute); aggregationEl.addEventListener('change', recompute); cumulModeEl.addEventListener('change', recompute); validationModeEl.addEventListener('change', recompute); rollingMetricEl.addEventListener('change', recompute);
 gridBtn.addEventListener('click', runGrid);
 applyBest.addEventListener('click', ()=>{ if(!lastBest) return; alphaEl.value=alphaNum.value=lastBest.a; betaEl.value=betaNum.value=lastBest.b; gammaEl.value=gammaNum.value=lastBest.g; recompute(); });
 
