@@ -74,5 +74,14 @@ L'application accepte désormais un CSV "large" contenant en une seule fois rece
 Les colonnes de montants utilisées sont:
 - `Réalisé dépenses.Cumul réalisé date comptable`
 - `Réalisé recettes.Cumul réalisé date comptable`
+- `Prévision cumulée` (optionnel, pour ventiler un budget annuel/cumulé en profil mensuel)
 
 Les colonnes avec accents mal décodés (ex: `RÃ©alisÃ©`) sont normalisées automatiquement pour éviter les bugs d'encodage.
+
+
+## Mode prévision annuelle ventilée
+Si la colonne `Prévision cumulée` est présente, l'application construit une courbe mensuelle ventilée selon:
+- le profil historique (moyenne des poids mensuels), ou
+- un profil saisonnier dérivé du modèle.
+
+Cette courbe est affichée avec le réel et la prévision SARIMA pour comparaison.

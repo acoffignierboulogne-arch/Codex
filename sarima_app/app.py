@@ -90,6 +90,56 @@ def fmt_euro(v: float) -> str:
     return f"{v:,.2f} €".replace(",", " ").replace(".", ",")
 
 
+def _stylable_options(df: pd.DataFrame, col: str) -> list[str]:
+    return sorted(df[col].dropna().astype(str).unique().tolist())
+
+
+def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, method: str) -> pd.Series:
+    """Ventile une prévision annuelle/cumulée en profil mensuel d'après l'historique réel."""
+    if "prevision_cumulee" not in scoped_df.columns:
+        return pd.Series(dtype=float)
+
+    year_budget = (
+        scoped_df.dropna(subset=["date"])
+        .assign(year=lambda d: pd.to_datetime(d["date"]).dt.year)
+        .groupby("year", as_index=True)["prevision_cumulee"]
+        .max()
+        .dropna()
+    )
+    if year_budget.empty:
+        return pd.Series(dtype=float)
+
+    hist = real_series.dropna()
+    if len(hist) < 12:
+        return pd.Series(dtype=float)
+
+    if method == "Historique":
+        month_weights = hist.groupby(hist.index.month).mean()
+    else:
+        try:
+            decomp = seasonal_decompose(hist, model="additive", period=12, extrapolate_trend="freq")
+            seasonal = pd.Series(decomp.seasonal, index=hist.index).groupby(hist.index.month).mean()
+            level = float(hist.mean())
+            month_weights = (level + seasonal).clip(lower=0)
+        except Exception:
+            month_weights = hist.groupby(hist.index.month).mean()
+
+    month_weights = month_weights.reindex(range(1, 13), fill_value=float(month_weights.mean() if not month_weights.empty else 1.0))
+    weight_sum = float(month_weights.sum())
+    if weight_sum <= 0:
+        month_weights[:] = 1 / 12
+    else:
+        month_weights = month_weights / weight_sum
+
+    rows = []
+    for year, annual in year_budget.items():
+        for month in range(1, 13):
+            rows.append((pd.Timestamp(year=int(year), month=month, day=1), float(annual) * float(month_weights.loc[month])))
+    budget = pd.Series(dict(rows)).sort_index()
+    budget = budget[~budget.index.duplicated(keep="last")]
+    return budget
+
+
 def compute_projection_yearly(real_series: pd.Series, pred_df: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
     real_map = {d.strftime("%Y-%m"): float(v) for d, v in real_series.dropna().items()}
     pred_map = {pd.Timestamp(r.date).strftime("%Y-%m"): float(r.value) for r in pred_df.itertuples()}
@@ -209,24 +259,45 @@ with st.sidebar:
     selected_flux = st.selectbox("Flux", flux_options, index=0)
     scoped = raw_df[raw_df["flux"] == selected_flux]
 
-    def _multi_filter(label: str, col: str):
-        opts = sorted(scoped[col].dropna().astype(str).unique().tolist())
-        picked = st.multiselect(label, opts, default=opts)
-        return picked or opts
+    with st.expander("Filtres détaillés", expanded=False):
+        search_text = st.text_input("Recherche rapide (titre / compte / chapitre)", value="").strip().lower()
+        if search_text:
+            m = (
+                scoped["titre"].astype(str).str.lower().str.contains(search_text, na=False)
+                | scoped["compte_execution"].astype(str).str.lower().str.contains(search_text, na=False)
+                | scoped["chapitre"].astype(str).str.lower().str.contains(search_text, na=False)
+            )
+            scoped = scoped[m]
 
-    selected_titres = _multi_filter("Titre", "titre")
-    scoped = scoped[scoped["titre"].astype(str).isin(selected_titres)]
-    selected_chapitres = _multi_filter("Chapitre", "chapitre")
-    scoped = scoped[scoped["chapitre"].astype(str).isin(selected_chapitres)]
-    selected_comptes = _multi_filter("Compte exécution", "compte_execution")
-    scoped = scoped[scoped["compte_execution"].astype(str).isin(selected_comptes)]
-    selected_sous = _multi_filter("Sous compte", "sous_compte")
-    scoped = scoped[scoped["sous_compte"].astype(str).isin(selected_sous)]
-    selected_sous6 = _multi_filter("Sous-compte classe 6", "sous_compte_classe_6")
-    scoped = scoped[scoped["sous_compte_classe_6"].astype(str).isin(selected_sous6)]
-    selected_lib = _multi_filter("Libellé du type", "libelle_type")
-    scoped = scoped[scoped["libelle_type"].astype(str).isin(selected_lib)]
+        col_a, col_b = st.columns(2)
+        titre_options = _stylable_options(scoped, "titre")
+        chap_options = _stylable_options(scoped, "chapitre")
+        selected_titre = col_a.selectbox("Titre", ["Tous"] + titre_options, index=0)
+        selected_chap = col_b.selectbox("Chapitre", ["Tous"] + chap_options, index=0)
+        if selected_titre != "Tous":
+            scoped = scoped[scoped["titre"].astype(str) == selected_titre]
+        if selected_chap != "Tous":
+            scoped = scoped[scoped["chapitre"].astype(str) == selected_chap]
 
+        col_c, col_d = st.columns(2)
+        compte_options = _stylable_options(scoped, "compte_execution")
+        sous_options = _stylable_options(scoped, "sous_compte")
+        selected_compte = col_c.selectbox("Compte exécution", ["Tous"] + compte_options, index=0)
+        selected_sous = col_d.selectbox("Sous compte", ["Tous"] + sous_options, index=0)
+        if selected_compte != "Tous":
+            scoped = scoped[scoped["compte_execution"].astype(str) == selected_compte]
+        if selected_sous != "Tous":
+            scoped = scoped[scoped["sous_compte"].astype(str) == selected_sous]
+
+        col_e, col_f = st.columns(2)
+        sous6_options = _stylable_options(scoped, "sous_compte_classe_6")
+        lib_options = _stylable_options(scoped, "libelle_type")
+        selected_sous6 = col_e.selectbox("Sous-compte classe 6", ["Tous"] + sous6_options, index=0)
+        selected_lib = col_f.selectbox("Libellé du type", ["Tous"] + lib_options, index=0)
+        if selected_sous6 != "Tous":
+            scoped = scoped[scoped["sous_compte_classe_6"].astype(str) == selected_sous6]
+        if selected_lib != "Tous":
+            scoped = scoped[scoped["libelle_type"].astype(str) == selected_lib]
 if scoped.empty:
     st.warning("Le filtrage courant ne retourne aucune ligne. Ajustez les filtres à gauche.")
     st.stop()
@@ -240,8 +311,8 @@ if len(valid_series) < 24:
     st.stop()
 
 st.caption(
-    f"Filtre actif — Flux: {selected_flux} | Titres: {len(selected_titres)} | Chapitres: {len(selected_chapitres)} | "
-    f"Comptes: {len(selected_comptes)} | Sous comptes: {len(selected_sous)}"
+    f"Filtre actif — Flux: {selected_flux} | Lignes retenues: {len(scoped):,} | "
+    f"Période: {scoped['date'].min().strftime('%m/%Y')} → {scoped['date'].max().strftime('%m/%Y')}"
 )
 
 with st.sidebar:
@@ -267,6 +338,7 @@ with st.sidebar:
         max_cut = valid_series.index[-1]
     cutoff = pd.Timestamp(st.slider("Cutoff", min_value=min_cut.to_pydatetime(), max_value=max_cut.to_pydatetime(), value=max_cut.to_pydatetime(), format="MM/YYYY")).replace(day=1)
     horizon = st.slider("Horizon (mois)", 1, 36, 12)
+    budget_mode = st.selectbox("Ventilation de la prévision cumulée", ["Historique", "Saisonnalité modèle"], index=0)
 
 train = series[series.index <= cutoff].dropna()
 post_real = series[series.index > cutoff].dropna()
@@ -294,10 +366,14 @@ fixed_insample_df = pd.DataFrame({"date": fixed_in_sample.index, "value": fixed_
 all_pred = pd.concat([fixed_insample_df, pred_df[["date", "value"]]], ignore_index=True)
 all_pred = all_pred.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
 
+budget_series = _monthly_budget_series(scoped, valid_series, method=budget_mode)
+budget_df = pd.DataFrame({"date": budget_series.index, "value": budget_series.values}) if not budget_series.empty else pd.DataFrame(columns=["date", "value"])
+
 agg = agg_map[aggregation_mode]
 real_pre_ag = aggregate_by_period(pd.DataFrame({"date": train.index, "value": train.values}), agg)
 real_post_ag = aggregate_by_period(pd.DataFrame({"date": post_real.index, "value": post_real.values}), agg)
 pred_ag = aggregate_by_period(all_pred, agg)
+budget_ag = aggregate_by_period(budget_df, agg) if not budget_df.empty else pd.DataFrame(columns=["date", "value"])
 ci_low_ag = aggregate_by_period(pred_df[["date", "lower"]].rename(columns={"lower": "value"}), agg)
 ci_high_ag = aggregate_by_period(pred_df[["date", "upper"]].rename(columns={"upper": "value"}), agg)
 
@@ -307,6 +383,8 @@ fig.add_trace(go.Scatter(x=real_pre_ag["date"], y=real_pre_ag["value"], mode="li
 fig.add_trace(go.Scatter(x=real_post_ag["date"], y=real_post_ag["value"], mode="lines", name="Réel post-cutoff", line=dict(color="#8eb6dd", width=2, dash="dash")))
 fig.add_trace(go.Scatter(x=ci_low_ag["date"], y=ci_low_ag["value"], mode="lines", line=dict(width=0), showlegend=False))
 fig.add_trace(go.Scatter(x=ci_high_ag["date"], y=ci_high_ag["value"], mode="lines", fill="tonexty", fillcolor="rgba(120,120,120,0.2)", line=dict(width=0), name="IC 95%"))
+if not budget_ag.empty:
+    fig.add_trace(go.Scatter(x=budget_ag["date"], y=budget_ag["value"], mode="lines", name="Prévision cumulée ventilée", line=dict(color="#7c4dff", width=2, dash="dot")))
 fig.add_trace(go.Scatter(x=pred_ag["date"], y=pred_ag["value"], mode="lines", name="Prévision SARIMA", line=dict(color="#f07a24", width=2)))
 fig.update_layout(height=520, margin=dict(l=20, r=20, t=10, b=20), xaxis_title="Date", yaxis_title="Montant (€)")
 st.plotly_chart(fig, use_container_width=True)
@@ -408,6 +486,19 @@ if not projection.empty:
         projection.style.format({"Réel cumulé": fmt_euro, "Prévision cumulée": fmt_euro, "Écart abs": fmt_euro, "Écart rel %": "{:.2f}%"}),
         use_container_width=True,
     )
+
+st.markdown("<p class='title'>Comparatif budget ventilé vs réel vs SARIMA</p>", unsafe_allow_html=True)
+if not budget_df.empty:
+    annual_budget = annual_comparison(pd.DataFrame({"date": valid_series.index, "value": valid_series.values}), budget_df)
+    if not annual_budget.empty:
+        annual_budget = annual_budget.rename(columns={"Σ Prévu": "Σ Budget ventilé"})
+        st.dataframe(
+            annual_budget.style.format({"Σ Réel": fmt_euro, "Σ Budget ventilé": fmt_euro, "Écart absolu": fmt_euro, "Écart relatif %": "{:.2f}%"}),
+            use_container_width=True,
+        )
+else:
+    st.info("Aucune 'prévision cumulée' exploitable trouvée dans le CSV filtré.")
+
 
 st.markdown("<p class='title'>Grid Search SARIMA</p>", unsafe_allow_html=True)
 with st.expander("Configurer et lancer"):

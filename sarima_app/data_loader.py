@@ -76,6 +76,7 @@ def _canonical_columns(raw: pd.DataFrame) -> pd.DataFrame:
         "sous_compte_classe_6": "sous_compte_classe_6",
         "libelle_du_type": "libelle_type",
         "libelle_type": "libelle_type",
+        "prevision_cumulee": "prevision_cumulee",
         "realise_depenses_cumul_realise_date_comptable": "montant_depenses",
         "realise_recettes_cumul_realise_date_comptable": "montant_recettes",
         # variantes sans accents / espaces
@@ -123,6 +124,7 @@ def _build_flat_dataset(raw: pd.DataFrame) -> pd.DataFrame:
         "sous_compte": df.get("sous_compte"),
         "sous_compte_classe_6": df.get("sous_compte_classe_6"),
         "libelle_type": df.get("libelle_type"),
+        "prevision_cumulee": df.get("prevision_cumulee"),
     }
 
     dep = pd.DataFrame({
@@ -142,6 +144,7 @@ def _build_flat_dataset(raw: pd.DataFrame) -> pd.DataFrame:
 
     flat = pd.concat([dep, rec], ignore_index=True)
     flat["value"] = flat["value"].map(_parse_amount)
+    flat["prevision_cumulee"] = flat["prevision_cumulee"].map(_parse_amount)
     for c in ["titre", "chapitre", "compte_execution", "sous_compte", "sous_compte_classe_6", "libelle_type"]:
         flat[c] = flat[c].fillna("(vide)").astype(str).map(_fix_mojibake)
     flat = flat.dropna(subset=["date", "value"])  # garder zéros
