@@ -423,6 +423,7 @@ with st.expander("Configurer et lancer"):
     years = sorted({int(d.year) for d in valid_series.index if d.year >= 2019})
     target_years = st.multiselect("Années cibles", years, default=years[-2:] if len(years) >= 2 else years)
     criterion = st.selectbox("Critère", ["Écart annuel cumulé", "AIC"])
+    st.caption("Si l'année du cutoff (ex: 2025) est sélectionnée avec le critère 'Écart annuel cumulé', le score est calculé en année glissante 12 mois (ex: 04/2024→03/2025).")
 
     total = (p_max-p_min+1)*(d_max-d_min+1)*(q_max-q_min+1)*(P_max-P_min+1)*(D_max-D_min+1)*(Q_max-Q_min+1)
     st.write(f"Combinaisons: **{int(total)}**")
