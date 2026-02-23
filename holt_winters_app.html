@@ -368,7 +368,7 @@ function buildProjectionTable(cutoffIdx, forecasts){
 
 function seasonalityWeightsFromParsed(){
   const byMonth=Array(12).fill(0), cnt=Array(12).fill(0);
-  const base = parsed.some(r=>r.date.getFullYear()<=2024) ? parsed.filter(r=>r.date.getFullYear()<=2024) : parsed;
+  const base = parsed.some(r=>r.date.getFullYear()<2025) ? parsed.filter(r=>r.date.getFullYear()<2025) : parsed;
   base.forEach(r=>{ const m=r.date.getMonth(); byMonth[m]+=Math.max(0,r.value); cnt[m]++; });
   const raw=byMonth.map((v,i)=>cnt[i]?v/cnt[i]:0);
   const sum=raw.reduce((a,b)=>a+b,0);
@@ -385,7 +385,8 @@ function seasonalizedBudgetSeries(weightInitial=0.7){
     const key = (r.sous && r.sous !== '(vide)') ? r.sous : ((r.compte && r.compte !== '(vide)') ? r.compte : r.titre);
     const k=`${y}__${key}`;
     if(!byYearKey[k]) byYearKey[k]={year:y, bp:0, adj:0};
-    byYearKey[k].bp = Math.max(byYearKey[k].bp, Number(r.budgetPrimitif||0));
+    // Budget primitif souvent stocké au mois (annuel/12) -> reconstruction annuelle.
+    byYearKey[k].bp = Math.max(byYearKey[k].bp, Number(r.budgetPrimitif||0) * 12);
     byYearKey[k].adj = Math.max(byYearKey[k].adj, Number(r.previsionCumulee||0));
   });
 

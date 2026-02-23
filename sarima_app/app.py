@@ -113,7 +113,9 @@ def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, meth
     yearly = (
         base.groupby(["year", key_col], as_index=False)
         .agg(
-            budget_primitif=("budget_primitif", "max"),
+            # Le CSV contient souvent un budget primitif mensuel répété (budget annuel / 12).
+            # On remonte donc systématiquement au budget annuel en multipliant par 12.
+            budget_primitif=("budget_primitif", lambda x: float(pd.Series(x).dropna().max()) * 12 if not pd.Series(x).dropna().empty else 0.0),
             prevision_cumulee=("prevision_cumulee", "max"),
         )
         .groupby("year", as_index=True)
@@ -128,7 +130,7 @@ def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, meth
 
     hist = real_series.dropna()
     # Stabilisation demandée: préférer une base saisonnière figée jusqu'à fin 2024.
-    hist_2024 = hist[hist.index <= pd.Timestamp("2024-12-01")]
+    hist_2024 = hist[hist.index < pd.Timestamp("2025-01-01")]
     if len(hist_2024) >= 12:
         hist = hist_2024
     if len(hist) < 12:
