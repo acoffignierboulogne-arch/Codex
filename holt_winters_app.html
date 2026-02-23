@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prévision dépenses - Holt-Winters</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <style>
+    :root { --navy:#0f2744; --light:#f6f8fb; --card:#fff; --muted:#5b6b7b; --accent:#f07a24; --danger:#cc3344; --border:#d8e0ea; }
+    body { margin:0; font-family: Inter, Roboto, system-ui, Arial, sans-serif; background:var(--light); color:#102033; }
+    .container { max-width:1280px; margin:0 auto; padding:20px; }
+    h1,h2,h3 { color:var(--navy); margin:0 0 8px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:14px; margin-bottom:14px; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px; box-shadow:0 2px 8px rgba(15,39,68,.05); }
+    .controls { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; margin:7px 0; }
+    .controls input[type=number], .controls select, .controls input[type=text] { width:95px; padding:6px; border:1px solid var(--border); border-radius:6px; }
+    .help { font-size:.82rem; color:var(--muted); margin:2px 0 8px; }
+    .dropzone { border:2px dashed #8ea6c1; border-radius:10px; padding:20px; text-align:center; color:var(--muted); background:#fbfcff; }
+    .dropzone.drag { border-color:var(--accent); background:#fff5ef; }
+    input[type=range] { width:100%; }
+    button { background:var(--navy); color:#fff; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
+    button.secondary { background:#677a8f; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .muted { color:var(--muted); font-size:.92rem; }
+    .table-wrap { overflow:auto; max-height:300px; }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th, td { border-bottom:1px solid var(--border); padding:6px; text-align:right; }
+    th:first-child, td:first-child { text-align:left; }
+    .err-high { background:#fff0f2; color:var(--danger); font-weight:700; }
+    .progress { width:100%; height:14px; border-radius:8px; background:#e8edf3; overflow:hidden; }
+    .progress > div { height:100%; width:0%; background:var(--accent); transition:width .15s; }
+    #chartBox { background:#fff; border:1px solid var(--border); border-radius:12px; padding:10px; }
+    canvas { width:100%; height:430px; }
+    .tabs { display:flex; gap:8px; margin:12px 0 8px; }
+    .tab-btn { background:#e8edf3; color:#23384f; }
+    .tab-btn.active { background:var(--navy); color:#fff; }
+    .tab-content { display:none; }
+    .tab-content.active { display:block; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>Démo prévision dépenses - Holt-Winters</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h2>1) Import CSV</h2>
+      <div id="dropzone" class="dropzone">Glissez-déposez un CSV ici ou <input id="fileInput" type="file" accept=".csv" /></div>
+      <p id="importInfo" class="muted">Aucune donnée importée.</p>
+      <div class="controls"><label>Flux</label><select id="fluxFilter"><option>Dépenses</option><option>Recettes</option></select></div>
+      <div class="controls"><label>Titre</label><select id="titreFilter"></select></div>
+      <div class="controls"><label>Chapitre</label><select id="chapitreFilter"></select></div>
+      <div class="controls"><label>Compte exécution</label><select id="compteFilter"></select></div>
+      <div class="controls"><label>Sous compte</label><select id="sousFilter"></select></div>
+      <div class="controls"><label>Sous-compte classe 6</label><select id="sous6Filter"></select></div>
+      <div class="controls"><label>Libellé du type</label><select id="libelleFilter"></select></div>
+      <p id="filterInfo" class="muted">Filtres: tous</p>
+      <div class="table-wrap"><table id="previewTable"></table></div>
+    </div>
+
+    <div class="card">
+      <h2>2) Paramètres Holt-Winters</h2>
+      <div class="controls"><label>Mode saisonnier</label><select id="mode"><option value="additive">Additif</option><option value="multiplicative">Multiplicatif</option></select></div>
+      <div class="controls"><label>Alpha (α)</label><input id="alpha" type="range" min="0.01" max="1" step="0.01" value="0.2"><input id="alphaNum" type="number" min="0.01" max="1" step="0.01" value="0.2"></div>
+      <p class="help">α élevé: suit vite les changements de niveau. α faible: lissage plus stable.</p>
+      <div class="controls"><label>Beta (β)</label><input id="beta" type="range" min="0.01" max="1" step="0.01" value="0.1"><input id="betaNum" type="number" min="0.01" max="1" step="0.01" value="0.1"></div>
+      <p class="help">β élevé: tendance plus réactive. β faible: tendance plus lissée.</p>
+      <div class="controls"><label>Gamma (γ)</label><input id="gamma" type="range" min="0.01" max="1" step="0.01" value="0.3"><input id="gammaNum" type="number" min="0.01" max="1" step="0.01" value="0.3"></div>
+      <p class="help">γ élevé: saisonnalité adapte vite les motifs. γ faible: saisonnalité plus stable.</p>
+      <div class="controls"><label>Phi (φ)</label><input id="phi" type="range" min="0.5" max="1" step="0.01" value="0.98"><input id="phiNum" type="number" min="0.5" max="1" step="0.01" value="0.98"></div>
+      <p class="help">φ=1: tendance non amortie. φ&lt;1: tendance qui s'atténue dans le futur.</p>
+      <div class="controls"><label>Agrégation</label><select id="aggregation"><option value="1">Mensuel</option><option value="3">Trimestriel</option><option value="4">Quadrimestriel</option><option value="6">Semestriel</option></select></div>
+      <p class="muted">Recalcul automatique sur chaque changement.</p>
+    </div>
+
+    <div class="card">
+      <h2>3) Cutoff & horizon</h2>
+      <div class="controls"><label>Cutoff</label><input id="cutoff" type="range" min="24" max="24" step="1" value="24"><input id="cutoffText" type="text" disabled></div>
+      <div class="controls"><label>Horizon (mois)</label><input id="horizon" type="range" min="1" max="36" step="1" value="12"><input id="horizonNum" type="number" min="1" max="36" step="1" value="12"></div>
+      <p class="muted">IC95% simplifié: ±5% de la prévision (borne basse plafonnée à 0).</p>
+    </div>
+  </div>
+
+  <div id="chartBox"><canvas id="chart"></canvas></div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="tab-performance">Performance annuelle</button>
+    <button class="tab-btn" data-tab="tab-projection">Projection fin d'année</button>
+  </div>
+
+  <div id="tab-performance" class="tab-content active">
+    <div class="grid">
+      <div class="card">
+        <h2>5) Performance annuelle cumulée</h2>
+        <div class="table-wrap"><table id="perfTable"></table></div>
+      </div>
+      <div class="card">
+        <h2>6) Grid Search (α, β, γ)</h2>
+        <div class="controls"><label>α min/max/pas</label><span><input id="aMin" type="number" step="0.01" value="0.05"> <input id="aMax" type="number" step="0.01" value="0.5"> <input id="aStep" type="number" step="0.01" value="0.05"></span></div>
+        <div class="controls"><label>β min/max/pas</label><span><input id="bMin" type="number" step="0.01" value="0.05"> <input id="bMax" type="number" step="0.01" value="0.5"> <input id="bStep" type="number" step="0.01" value="0.05"></span></div>
+        <div class="controls"><label>γ min/max/pas</label><span><input id="gMin" type="number" step="0.01" value="0.05"> <input id="gMax" type="number" step="0.01" value="0.5"> <input id="gStep" type="number" step="0.01" value="0.05"></span></div>
+        <div id="yearsChecks" class="muted">Années cibles: importez des données</div>
+        <div class="progress"><div id="progressBar"></div></div>
+        <p id="gridResult" class="muted">Aucun calcul.</p>
+        <button id="gridBtn" disabled>Lancer le Grid Search</button>
+        <button id="applyBest" class="secondary" disabled>Appliquer ces paramètres</button>
+        <div class="table-wrap"><table id="top5"></table></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-projection" class="tab-content">
+    <div class="card">
+      <h2>Projection annuelle (réel + prévision à partir du cutoff)</h2>
+      <p class="muted">Pour chaque année, on cumule le réel déjà connu et la prévision HW sur les mois futurs inclus dans l'horizon.</p>
+      <div class="table-wrap"><table id="projectionTable"></table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const frMonth = new Intl.DateTimeFormat('fr-FR', { month: 'short', year: 'numeric' });
+const frMoney = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+let rawRows = [], parsed = [], chart = null, lastBest = null, gridRunning = false;
+
+function fmtMoney(v) { return `${frMoney.format(v || 0)} €`; }
+function monthLabel(d) { return frMonth.format(d).replace('.', ''); }
+function toMonthStart(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
+function dampedSum(phi, h){ return Math.abs(phi - 1) < 1e-9 ? h : (phi * (1 - Math.pow(phi, h)) / (1 - phi)); }
+
+function fixMojibake(str){
+  return String(str ?? '').replace(/Ã©/g,'é').replace(/Ã¨/g,'è').replace(/Ãª/g,'ê').replace(/Ã /g,'à').replace(/Ã§/g,'ç').replace(/Ã»/g,'û').replace(/Ã´/g,'ô').replace(/Ã‰/g,'É');
+}
+function normalizeLabel(str){ return fixMojibake(String(str ?? '')).trim(); }
+function slug(str){ return normalizeLabel(str).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''); }
+function monthFromYearMonth(y,m){ const yy=Number(y), mm=Number(m); if(!Number.isFinite(yy)||!Number.isFinite(mm)||mm<1||mm>12) return null; return new Date(yy,mm-1,1); }
+function detectColumns(cols){
+  const m={};
+  cols.forEach(c=>{ const k=slug(c); m[k]=c; });
+  return {
+    exercice:m.exercice, mois:m.mois, date:m.date,
+    titreDep:m.titre_depenses || m.titre_d_penses,
+    titreRec:m.titre_recettes,
+    chapitre:m.chapitre,
+    compte:m.compte_execution || m.compte_ex_cution,
+    sous:m.sous_compte,
+    sous6:m.sous_compte_classe_6 || m.sous_compte_classe6,
+    libelle:m.libelle_du_type || m.libelle_type || m.libell_du_type,
+    dep:m.realise_depenses_cumul_realise_date_comptable || m.realis_depenses_cumul_realise_date_comptable,
+    rec:m.realise_recettes_cumul_realise_date_comptable || m.realis_recettes_cumul_realise_date_comptable
+  };
+}
+function splitCSVLine(line, sep){
+  const out=[]; let cur='', q=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch==='"') { q=!q; continue; }
+    if(ch===sep && !q){ out.push(cur); cur=''; continue; }
+    cur+=ch;
+  }
+  out.push(cur); return out;
+}
+function parseCSVRaw(text){
+  const lines=text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean); if(!lines.length) return [];
+  const sep=(lines[0].split(';').length>=lines[0].split(',').length)?';':',';
+  const headers=splitCSVLine(lines[0],sep).map(normalizeLabel);
+  const map=detectColumns(headers);
+  const rows=[];
+  for(let i=1;i<lines.length;i++){
+    const vals=splitCSVLine(lines[i],sep); if(vals.length<2) continue;
+    const obj={}; headers.forEach((h,idx)=>obj[h]=vals[idx]);
+    let date=null;
+    if(map.date && obj[map.date]!==undefined) date=parseFrenchDate(obj[map.date]);
+    else if(map.exercice && map.mois) date=monthFromYearMonth(obj[map.exercice],obj[map.mois]);
+    if(!date) continue;
+    const base={date:toMonthStart(date), chapitre:normalizeLabel(obj[map.chapitre]||'(vide)'), compte:normalizeLabel(obj[map.compte]||'(vide)'), sous:normalizeLabel(obj[map.sous]||'(vide)'), sous6:normalizeLabel(obj[map.sous6]||'(vide)'), libelle:normalizeLabel(obj[map.libelle]||'(vide)')};
+    const depVal=parseAmount(obj[map.dep]); if(depVal!==null) rows.push({...base, flux:'Dépenses', titre:normalizeLabel(obj[map.titreDep]||'(vide)'), value:depVal});
+    const recVal=parseAmount(obj[map.rec]); if(recVal!==null) rows.push({...base, flux:'Recettes', titre:normalizeLabel(obj[map.titreRec]||'(vide)'), value:recVal});
+    if(!map.dep && !map.rec && i===1){ const d=parseFrenchDate(vals[0]); const v=parseAmount(vals[1]); if(d&&v!==null) rows.push({date:toMonthStart(d), flux:'Dépenses', titre:'(global)', chapitre:'(global)', compte:'(global)', sous:'(global)', sous6:'(global)', libelle:'(global)', value:v}); }
+  }
+  return rows;
+}
+function fillSelect(select, values){
+  const opts=['__ALL__', ...values];
+  select.innerHTML = opts.map(v=>`<option value="${v}">${v==='__ALL__'?'Tous':v}</option>`).join('');
+}
+function initFilters(){
+  const fluxSel=document.getElementById('fluxFilter');
+  const titreSel=document.getElementById('titreFilter'); const chSel=document.getElementById('chapitreFilter');
+  const coSel=document.getElementById('compteFilter'); const sSel=document.getElementById('sousFilter'); const s6Sel=document.getElementById('sous6Filter'); const lSel=document.getElementById('libelleFilter');
+  const scoped=rawRows.filter(r=>r.flux===fluxSel.value);
+  fillSelect(titreSel,[...new Set(scoped.map(r=>r.titre))].sort());
+  fillSelect(chSel,[...new Set(scoped.map(r=>r.chapitre))].sort());
+  fillSelect(coSel,[...new Set(scoped.map(r=>r.compte))].sort());
+  fillSelect(sSel,[...new Set(scoped.map(r=>r.sous))].sort());
+  fillSelect(s6Sel,[...new Set(scoped.map(r=>r.sous6))].sort());
+  fillSelect(lSel,[...new Set(scoped.map(r=>r.libelle))].sort());
+}
+function applyFilters(){
+  const flux=document.getElementById('fluxFilter').value;
+  const titre=document.getElementById('titreFilter').value;
+  const chap=document.getElementById('chapitreFilter').value;
+  const compte=document.getElementById('compteFilter').value;
+  const sous=document.getElementById('sousFilter').value;
+  const sous6=document.getElementById('sous6Filter').value;
+  const lib=document.getElementById('libelleFilter').value;
+  const filtered=rawRows.filter(r=>
+    r.flux===flux &&
+    (titre==='__ALL__' || r.titre===titre) &&
+    (chap==='__ALL__' || r.chapitre===chap) &&
+    (compte==='__ALL__' || r.compte===compte) &&
+    (sous==='__ALL__' || r.sous===sous) &&
+    (sous6==='__ALL__' || r.sous6===sous6) &&
+    (lib==='__ALL__' || r.libelle===lib)
+  );
+  const dedup = new Map();
+  filtered.forEach(r=>{ const k=r.date.toISOString().slice(0,7); dedup.set(k,(dedup.get(k)||0)+r.value);});
+  parsed=[...dedup.entries()].map(([k,v])=>({date:new Date(k+'-01'), value:v})).sort((a,b)=>a.date-b.date);
+  const fi=document.getElementById('filterInfo');
+  fi.textContent=`Filtre actif: ${flux} | ${titre==='__ALL__'?'Tous titres':titre} | ${chap==='__ALL__'?'Tous chapitres':chap}`;
+}
+
+function parseFrenchDate(raw) {
+  const s = String(raw).trim().toLowerCase();
+  const months = { janv:1, janvier:1, fev:2, fév:2, fevrier:2, février:2, mars:3, avr:4, avril:4, mai:5, juin:6, juil:7, juillet:7, aout:8, août:8, sept:9, octobre:10, oct:10, nov:11, dec:12, décembre:12, decembre:12 };
+  let m;
+  if ((m = s.match(/^(\d{1,2})\/(\d{4})$/))) return new Date(+m[2], +m[1]-1, 1);
+  if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) return new Date(+m[3], +m[2]-1, 1);
+  if ((m = s.match(/^([a-zéûôîç\.]+)[-\s](\d{4})$/))) { const mm = months[m[1].replace('.', '')]; if (mm) return new Date(+m[2], mm-1, 1); }
+  if ((m = s.match(/^(\d{4})[-\/](\d{1,2})$/))) return new Date(+m[1], +m[2]-1, 1);
+  const dt = new Date(s); if (!isNaN(dt.getTime())) return new Date(dt.getFullYear(), dt.getMonth(), 1);
+  return null;
+}
+
+function parseAmount(raw) {
+  const s = String(raw).trim().replace(/\s/g, '').replace(/\u00a0/g, '').replace(/\./g, '').replace(',', '.');
+  const v = Number(s); return Number.isFinite(v) ? v : null;
+}
+
+function buildPreview(){
+  const tbl = document.getElementById('previewTable');
+  if (!parsed.length){ tbl.innerHTML=''; return; }
+  const head = `<tr><th>Date</th><th>Montant</th></tr>`;
+  const first = parsed.slice(0,5), last = parsed.slice(-5);
+  const rows = [...first, ...(parsed.length>10?[{sep:true}]:[]), ...last].map(r=>r.sep?`<tr><td>...</td><td>...</td></tr>`:`<tr><td>${monthLabel(r.date)}</td><td>${fmtMoney(r.value)}</td></tr>`).join('');
+  tbl.innerHTML = head + rows;
+  importInfo.textContent = `${parsed.length} mois importés (${monthLabel(parsed[0].date)} → ${monthLabel(parsed[parsed.length-1].date)}).`;
+}
+
+function syncPair(range, num, cb){
+  range.addEventListener('input', ()=>{ num.value = range.value; cb(); });
+  num.addEventListener('input', ()=>{ range.value = num.value; cb(); });
+}
+
+function fitHoltWinters(series, alpha, beta, gamma, phi, mode, horizon){
+  const m=12; if (series.length < 24) return null;
+  const y = series.map(x=>x.value);
+  const avg1 = y.slice(0,m).reduce((a,b)=>a+b,0)/m;
+  const avg2 = y.slice(m,2*m).reduce((a,b)=>a+b,0)/m;
+  let L = avg1, B = (avg2-avg1)/m;
+  const S = Array(series.length + horizon + m).fill(mode==='multiplicative'?1:0);
+  for (let i=0;i<m;i++) S[i] = mode==='multiplicative' ? (y[i]/avg1 || 1) : (y[i]-avg1);
+  const fitted = Array(y.length).fill(null);
+  for (let t=m;t<y.length;t++){
+    const prev = mode==='multiplicative' ? (L + phi*B) * S[t-m] : (L + phi*B) + S[t-m];
+    fitted[t]=prev;
+    const prevL=L;
+    if (mode==='multiplicative') {
+      L = alpha * (y[t] / (S[t-m] || 1)) + (1-alpha) * (L + phi*B);
+      B = beta * (L-prevL) + (1-beta) * phi*B;
+      S[t] = gamma * (y[t]/(L||1)) + (1-gamma) * S[t-m];
+    } else {
+      L = alpha * (y[t] - S[t-m]) + (1-alpha) * (L + phi*B);
+      B = beta * (L-prevL) + (1-beta) * phi*B;
+      S[t] = gamma * (y[t]-L) + (1-gamma) * S[t-m];
+    }
+  }
+  const forecasts=[];
+  for (let h=1; h<=horizon; h++){
+    const idx = y.length-m+((h-1)%m);
+    const trend = dampedSum(phi,h) * B;
+    forecasts.push(mode==='multiplicative' ? (L + trend) * S[idx] : (L + trend) + S[idx]);
+  }
+  return {fitted, forecasts};
+}
+
+function aggregateSeries(labels, real, pred, low, high, step){
+  if (step===1) return {labels, real, pred, low, high};
+  const out = {labels:[], real:[], pred:[], low:[], high:[]};
+  for(let i=0;i<labels.length;i+=step){
+    const chunk = arr => arr.slice(i,i+step).reduce((a,b)=>a+(b??0),0);
+    out.labels.push(labels[i]); out.real.push(chunk(real)); out.pred.push(chunk(pred)); out.low.push(chunk(low)); out.high.push(chunk(high));
+  }
+  return out;
+}
+
+function computeAnnual(realMap, predMap){
+  const years = [...new Set(Object.keys(realMap).map(k=>k.slice(0,4)))].sort();
+  return years.map(y=>{
+    const keys = Object.keys(realMap).filter(k=>k.startsWith(y+'-'));
+    const both = keys.filter(k=>predMap[k]!==undefined && predMap[k]!==null && realMap[k]!==null);
+    if (both.length!==12) return null;
+    const r = both.reduce((a,k)=>a+realMap[k],0), p = both.reduce((a,k)=>a+predMap[k],0), abs = Math.abs(r-p), rel = r===0?0:abs/Math.abs(r)*100;
+    return {year:y, real:r, pred:p, abs, rel};
+  }).filter(Boolean);
+}
+
+function buildProjectionTable(cutoffIdx, forecasts){
+  const horizon = forecasts.length;
+  const end = addMonths(parsed[cutoffIdx].date, horizon);
+  const years = [];
+  for (let y=parsed[0].date.getFullYear(); y<=end.getFullYear(); y++) years.push(y);
+
+  const realMap = {}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
+  const rows = years.map(year=>{
+    let realCum=0, projCum=0, months=0;
+    for(let m=0;m<12;m++){
+      const dt = new Date(year,m,1);
+      const key = dt.toISOString().slice(0,7);
+      const idx = (year - parsed[cutoffIdx].date.getFullYear())*12 + (m - parsed[cutoffIdx].date.getMonth()) - 1;
+      const real = realMap[key];
+      if (real!==undefined) realCum += real;
+      let proj = null;
+      if (dt <= parsed[cutoffIdx].date && real!==undefined) proj = real;
+      if (idx>=0 && idx<forecasts.length) proj = forecasts[idx];
+      if (proj!==null) { projCum += proj; months++; }
+    }
+    if (months===0) return null;
+    const abs = Math.abs(realCum-projCum), rel = realCum===0?0:abs/Math.abs(realCum)*100;
+    return {year, realCum, projCum, abs, rel, months};
+  }).filter(Boolean);
+
+  projectionTable.innerHTML = '<tr><th>Année</th><th>Réel cumulé</th><th>Prévision cumulée</th><th>Écart abs.</th><th>Écart rel.</th><th>Mois couverts</th></tr>' +
+    rows.map(r=>`<tr class="${r.rel>5?'err-high':''}"><td>${r.year}</td><td>${fmtMoney(r.realCum)}</td><td>${fmtMoney(r.projCum)}</td><td>${fmtMoney(r.abs)}</td><td>${r.rel.toFixed(2)}%</td><td>${r.months}</td></tr>`).join('');
+}
+
+function recompute(){
+  if (parsed.length < 24){
+    if(parsed.length>0) importInfo.textContent += " | Série filtrée insuffisante (<24 mois).";
+    return;
+  }
+  const alpha=+alphaEl.value, beta=+betaEl.value, gamma=+gammaEl.value, phi=+phiEl.value;
+  const mode=modeEl.value, cutoffIdx=+cutoffEl.value, horizon=+horizonEl.value, agg=+aggregationEl.value;
+  const hw = fitHoltWinters(parsed.slice(0, cutoffIdx+1), alpha,beta,gamma,phi,mode,horizon);
+  if (!hw) return;
+  cutoffText.value = monthLabel(parsed[cutoffIdx].date);
+
+  const labels = parsed.map(r=>monthLabel(r.date));
+  const preReal = parsed.map((r,i)=> i<=cutoffIdx ? r.value : null);
+  const postReal = parsed.map((r,i)=> i>cutoffIdx ? r.value : null);
+  const pred = Array(parsed.length + horizon).fill(null), low = Array(parsed.length + horizon).fill(null), high = Array(parsed.length + horizon).fill(null);
+
+  for(let i=0;i<hw.fitted.length;i++) if(hw.fitted[i]!=null){ pred[i]=hw.fitted[i]; low[i]=Math.max(0, pred[i]*0.95); high[i]=pred[i]*1.05; }
+  const extLabels=[...labels];
+  for(let h=1; h<=horizon; h++){
+    const idx=cutoffIdx+h, d=addMonths(parsed[cutoffIdx].date,h), v=hw.forecasts[h-1];
+    if(!extLabels[idx]) extLabels[idx]=monthLabel(d);
+    pred[idx]=v; low[idx]=Math.max(0, v*0.95); high[idx]=v*1.05;
+  }
+
+  const ag = aggregateSeries(extLabels, [...preReal,...Array(horizon).fill(null)], [...pred], [...low], [...high], agg);
+  const postAg = aggregateSeries(extLabels, [...postReal,...Array(horizon).fill(null)], [...pred], [...low], [...high], agg);
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById('chart'), {
+    type:'line', data:{ labels:ag.labels, datasets:[
+      {label:'Réel (pré-cutoff)', data:ag.real, borderColor:'#2f6db3', borderWidth:2, pointRadius:0},
+      {label:'Réel (post-cutoff)', data:postAg.real, borderColor:'#8eb6dd', borderDash:[6,4], borderWidth:2, pointRadius:0},
+      {label:'IC95% bas', data:ag.low, borderColor:'rgba(0,0,0,0)', pointRadius:0, fill:false},
+      {label:'IC95%', data:ag.high, borderColor:'rgba(0,0,0,0)', backgroundColor:'rgba(120,120,120,.2)', pointRadius:0, fill:'-1'},
+      {label:'Prévision HW', data:ag.pred, borderColor:'#f07a24', borderWidth:2, pointRadius:0}
+    ]},
+    options:{ responsive:true, interaction:{mode:'index', intersect:false}, scales:{ y:{ ticks:{ callback:v=>frMoney.format(v) } } },
+      plugins:{ legend:{position:'top'}, tooltip:{callbacks:{label:(ctx)=>`${ctx.dataset.label}: ${fmtMoney(ctx.raw)}`}},
+        zoom:{ pan:{enabled:true, mode:'x', modifierKey:null}, zoom:{wheel:{enabled:true}, pinch:{enabled:true}, drag:{enabled:false}, mode:'x'} } } }
+  });
+
+  const realMap = {}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
+  const predMap = {}; pred.forEach((v,i)=>{ if(v==null) return; const dt=i<parsed.length?parsed[i].date:addMonths(parsed[parsed.length-1].date,i-parsed.length+1); predMap[dt.toISOString().slice(0,7)] = v;});
+  const rows = computeAnnual(realMap,predMap);
+  perfTable.innerHTML = '<tr><th>Année</th><th>Σ Réel</th><th>Σ Prévision</th><th>Écart abs.</th><th>Écart rel.</th></tr>' + rows.map(r=>`<tr class="${r.rel>5?'err-high':''}"><td>${r.year}</td><td>${fmtMoney(r.real)}</td><td>${fmtMoney(r.pred)}</td><td>${fmtMoney(r.abs)}</td><td>${r.rel.toFixed(2)}%</td></tr>`).join('');
+  buildProjectionTable(cutoffIdx, hw.forecasts);
+}
+
+async function runGrid(){
+  if (gridRunning) return;
+  const checks = [...document.querySelectorAll('#yearsChecks input[type=checkbox]:checked')].map(c=>String(c.value));
+  if (!checks.length) { alert('Sélectionnez au moins une année cible.'); return; }
+  const range = (min,max,step)=>{ if(step<=0||max<min) return []; const out=[]; for(let x=min; x<=max+1e-9; x+=step) out.push(+x.toFixed(4)); return out; };
+  const as=range(+aMin.value,+aMax.value,+aStep.value), bs=range(+bMin.value,+bMax.value,+bStep.value), gs=range(+gMin.value,+gMax.value,+gStep.value);
+  const total = as.length*bs.length*gs.length; if(!total){ gridResult.textContent='Paramètres de grille invalides.'; return; }
+
+  const cutoffIdx=+cutoffEl.value, mode=modeEl.value, phi=+phiEl.value, fitSeries=parsed.slice(0,cutoffIdx+1), monthsAfterCutoff=Math.max(1, parsed.length-cutoffIdx-1);
+  const realMap={}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
+  gridRunning=true; gridBtn.disabled=true; progressBar.style.width='0%'; top5.innerHTML=''; gridResult.textContent=`Calcul en cours (${total} combinaisons)...`;
+
+  const top=[]; let done=0;
+  for(const a of as){ for(const b of bs){ for(const g of gs){
+    const hw=fitHoltWinters(fitSeries,a,b,g,phi,mode,monthsAfterCutoff);
+    if(hw){
+      const predMap={}; hw.fitted.forEach((v,i)=>{ if(v!=null) predMap[parsed[i].date.toISOString().slice(0,7)] = v; });
+      for(let h=1; h<=monthsAfterCutoff; h++) predMap[addMonths(parsed[cutoffIdx].date,h).toISOString().slice(0,7)] = hw.forecasts[h-1];
+      const years = computeAnnual(realMap,predMap).filter(r=>checks.includes(String(r.year)));
+      const score = years.length ? years.reduce((x,r)=>x+r.rel,0) : Infinity;
+      if (Number.isFinite(score)) { top.push({a,b,g,score}); top.sort((x,y)=>x.score-y.score); if(top.length>5) top.pop(); }
+    }
+    done++; progressBar.style.width=`${(100*done/total).toFixed(1)}%`;
+  }} await new Promise(r=>setTimeout(r,0)); }
+
+  if (!top.length){ gridResult.textContent='Aucune combinaison valide pour les années sélectionnées.'; applyBest.disabled=true; }
+  else {
+    lastBest=top[0]; gridResult.textContent=`Meilleur: α=${lastBest.a}, β=${lastBest.b}, γ=${lastBest.g} | score cumulé=${lastBest.score.toFixed(3)}%`; applyBest.disabled=false;
+    top5.innerHTML='<tr><th>Rang</th><th>α</th><th>β</th><th>γ</th><th>Score cumulé</th></tr>'+top.map((r,i)=>`<tr><td>${i+1}</td><td>${r.a}</td><td>${r.b}</td><td>${r.g}</td><td>${r.score.toFixed(3)}%</td></tr>`).join('');
+  }
+  gridRunning=false; gridBtn.disabled=parsed.length<24;
+}
+
+const fileInput=document.getElementById('fileInput'), dropzone=document.getElementById('dropzone');
+const alphaEl=document.getElementById('alpha'), alphaNum=document.getElementById('alphaNum');
+const betaEl=document.getElementById('beta'), betaNum=document.getElementById('betaNum');
+const gammaEl=document.getElementById('gamma'), gammaNum=document.getElementById('gammaNum');
+const phiEl=document.getElementById('phi'), phiNum=document.getElementById('phiNum');
+const horizonEl=document.getElementById('horizon'), horizonNum=document.getElementById('horizonNum');
+const cutoffEl=document.getElementById('cutoff'), cutoffText=document.getElementById('cutoffText');
+const modeEl=document.getElementById('mode'), aggregationEl=document.getElementById('aggregation');
+const gridBtn=document.getElementById('gridBtn'), applyBest=document.getElementById('applyBest');
+const perfTable=document.getElementById('perfTable'), projectionTable=document.getElementById('projectionTable');
+
+function updateYearsForGrid(){
+  if(!parsed.length){ yearsChecks.textContent='Années cibles: importez des données'; return; }
+  const years=[...new Set(parsed.map(r=>r.date.getFullYear()))].filter(y=>y>=2020);
+  yearsChecks.innerHTML='Années cibles: '+years.map(y=>`<label style="margin-right:8px;"><input type="checkbox" value="${y}" checked> ${y}</label>`).join('');
+}
+
+function loadFile(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    rawRows = parseCSVRaw(reader.result);
+    initFilters();
+    applyFilters();
+    buildPreview(); updateYearsForGrid();
+    cutoffEl.min=24; cutoffEl.max=Math.max(24, parsed.length-1); cutoffEl.value=Math.max(24, parsed.length-1);
+    gridBtn.disabled = parsed.length < 24;
+    recompute();
+  };
+  reader.readAsText(file, 'utf-8');
+}
+
+fileInput.onchange = (e)=>loadFile(e.target.files[0]);
+['dragenter','dragover'].forEach(evt=>dropzone.addEventListener(evt,(e)=>{e.preventDefault(); dropzone.classList.add('drag');}));
+['dragleave','drop'].forEach(evt=>dropzone.addEventListener(evt,(e)=>{e.preventDefault(); dropzone.classList.remove('drag');}));
+dropzone.addEventListener('drop', (e)=>loadFile(e.dataTransfer.files[0]));
+
+["fluxFilter","titreFilter","chapitreFilter","compteFilter","sousFilter","sous6Filter","libelleFilter"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{ if(id==="fluxFilter") initFilters(); applyFilters(); buildPreview(); updateYearsForGrid(); cutoffEl.max=Math.max(24, parsed.length-1); cutoffEl.value=Math.min(+cutoffEl.value, +cutoffEl.max); gridBtn.disabled = parsed.length < 24; recompute(); }));
+
+syncPair(alphaEl, alphaNum, recompute); syncPair(betaEl, betaNum, recompute); syncPair(gammaEl, gammaNum, recompute); syncPair(phiEl, phiNum, recompute); syncPair(horizonEl, horizonNum, recompute);
+cutoffEl.addEventListener('input', recompute); modeEl.addEventListener('change', recompute); aggregationEl.addEventListener('change', recompute);
+gridBtn.addEventListener('click', runGrid);
+applyBest.addEventListener('click', ()=>{ if(!lastBest) return; alphaEl.value=alphaNum.value=lastBest.a; betaEl.value=betaNum.value=lastBest.b; gammaEl.value=gammaNum.value=lastBest.g; recompute(); });
+
+[...document.querySelectorAll('.tab-btn')].forEach(btn=>btn.addEventListener('click', ()=>{
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  btn.classList.add('active'); document.getElementById(btn.dataset.tab).classList.add('active');
+}));
+</script>
+</body>
+</html>
