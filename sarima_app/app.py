@@ -94,15 +94,13 @@ def _stylable_options(df: pd.DataFrame, col: str) -> list[str]:
     return sorted(df[col].dropna().astype(str).unique().tolist())
 
 
-def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, method: str, initial_weight: float) -> tuple[pd.Series, pd.Series]:
+def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, method: str) -> pd.Series:
     """Ventile les prévisions annuelles en profil mensuel.
 
-    Retourne:
-    - série du budget primitif saisonnalisé
-    - série de prévision service pondérée (budget primitif majoritaire + ajustement en cours d'année)
+    Retourne la série du budget primitif saisonnalisé.
     """
     if "budget_primitif" not in scoped_df.columns and "prevision_cumulee" not in scoped_df.columns:
-        return pd.Series(dtype=float), pd.Series(dtype=float)
+        return pd.Series(dtype=float)
 
     base = scoped_df.dropna(subset=["date"]).copy()
     base["year"] = pd.to_datetime(base["date"]).dt.year
@@ -126,7 +124,7 @@ def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, meth
         .fillna(0.0)
     )
     if yearly.empty:
-        return pd.Series(dtype=float), pd.Series(dtype=float)
+        return pd.Series(dtype=float)
 
     hist = real_series.dropna()
     # Stabilisation demandée: préférer une base saisonnière figée jusqu'à fin 2024.
@@ -134,7 +132,7 @@ def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, meth
     if len(hist_2024) >= 12:
         hist = hist_2024
     if len(hist) < 12:
-        return pd.Series(dtype=float), pd.Series(dtype=float)
+        return pd.Series(dtype=float)
 
     if method == "Historique":
         month_weights = hist.groupby(hist.index.month).mean()
@@ -152,23 +150,16 @@ def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, meth
     month_weights = (month_weights / weight_sum) if weight_sum > 0 else pd.Series([1 / 12] * 12, index=range(1, 13))
 
     prim_rows = []
-    service_rows = []
-    w = min(1.0, max(0.0, float(initial_weight)))
     for year, row in yearly.iterrows():
         budget_prim = float(row.get("budget_primitif", 0.0) or 0.0)
-        budget_adj = float(row.get("prevision_cumulee", 0.0) or 0.0)
-        service_budget = w * budget_prim + (1 - w) * budget_adj
         for month in range(1, 13):
             dt = pd.Timestamp(year=int(year), month=month, day=1)
             factor = float(month_weights.loc[month])
             prim_rows.append((dt, budget_prim * factor))
-            service_rows.append((dt, service_budget * factor))
 
     prim = pd.Series(dict(prim_rows)).sort_index()
-    service = pd.Series(dict(service_rows)).sort_index()
     prim = prim[~prim.index.duplicated(keep="last")]
-    service = service[~service.index.duplicated(keep="last")]
-    return prim, service
+    return prim
 
 
 def compute_projection_yearly(real_series: pd.Series, pred_df: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
@@ -409,7 +400,6 @@ with st.sidebar:
     cutoff = pd.Timestamp(st.slider("Cutoff", min_value=min_cut.to_pydatetime(), max_value=max_cut.to_pydatetime(), value=max_cut.to_pydatetime(), format="MM/YYYY")).replace(day=1)
     horizon = st.slider("Horizon (mois)", 1, 36, 12)
     budget_mode = st.selectbox("Ventilation de la prévision annuelle", ["Historique", "Saisonnalité modèle"], index=0)
-    initial_weight = st.slider("Poids budget primitif vs ajustement", 0.0, 1.0, 0.7, 0.05)
 
 train = series[series.index <= cutoff].dropna()
 post_real = series[series.index > cutoff].dropna()
@@ -437,16 +427,14 @@ fixed_insample_df = pd.DataFrame({"date": fixed_in_sample.index, "value": fixed_
 all_pred = pd.concat([fixed_insample_df, pred_df[["date", "value"]]], ignore_index=True)
 all_pred = all_pred.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
 
-budget_initial_series, budget_service_series = _monthly_budget_series(scoped, valid_series, method=budget_mode, initial_weight=initial_weight)
+budget_initial_series = _monthly_budget_series(scoped, valid_series, method=budget_mode)
 budget_initial_df = pd.DataFrame({"date": budget_initial_series.index, "value": budget_initial_series.values}) if not budget_initial_series.empty else pd.DataFrame(columns=["date", "value"])
-budget_service_df = pd.DataFrame({"date": budget_service_series.index, "value": budget_service_series.values}) if not budget_service_series.empty else pd.DataFrame(columns=["date", "value"])
 
 agg = agg_map[aggregation_mode]
 real_pre_ag = aggregate_by_period(pd.DataFrame({"date": train.index, "value": train.values}), agg)
 real_post_ag = aggregate_by_period(pd.DataFrame({"date": post_real.index, "value": post_real.values}), agg)
 pred_ag = aggregate_by_period(all_pred, agg)
 budget_initial_ag = aggregate_by_period(budget_initial_df, agg) if not budget_initial_df.empty else pd.DataFrame(columns=["date", "value"])
-budget_service_ag = aggregate_by_period(budget_service_df, agg) if not budget_service_df.empty else pd.DataFrame(columns=["date", "value"])
 ci_low_ag = aggregate_by_period(pred_df[["date", "lower"]].rename(columns={"lower": "value"}), agg)
 ci_high_ag = aggregate_by_period(pred_df[["date", "upper"]].rename(columns={"upper": "value"}), agg)
 
@@ -458,8 +446,6 @@ fig.add_trace(go.Scatter(x=ci_low_ag["date"], y=ci_low_ag["value"], mode="lines"
 fig.add_trace(go.Scatter(x=ci_high_ag["date"], y=ci_high_ag["value"], mode="lines", fill="tonexty", fillcolor="rgba(120,120,120,0.2)", line=dict(width=0), name="IC 95%"))
 if not budget_initial_ag.empty:
     fig.add_trace(go.Scatter(x=budget_initial_ag["date"], y=budget_initial_ag["value"], mode="lines", name="Budget primitif saisonnalisé", line=dict(color="#5b4bc4", width=2, dash="dot")))
-if not budget_service_ag.empty:
-    fig.add_trace(go.Scatter(x=budget_service_ag["date"], y=budget_service_ag["value"], mode="lines", name="Prévision service saisonnalisée", line=dict(color="#7c4dff", width=2, dash="dash")))
 fig.add_trace(go.Scatter(x=pred_ag["date"], y=pred_ag["value"], mode="lines", name="Prévision SARIMA", line=dict(color="#f07a24", width=2)))
 fig.update_layout(height=520, margin=dict(l=20, r=20, t=10, b=20), xaxis_title="Date", yaxis_title="Montant (€)")
 st.plotly_chart(fig, use_container_width=True)
@@ -569,23 +555,34 @@ if not projection.empty:
         use_container_width=True,
     )
 
-st.markdown("<p class='title'>Comparatif prévision initiale / service / modèle</p>", unsafe_allow_html=True)
-if not budget_initial_df.empty or not budget_service_df.empty:
+st.markdown("<p class='title'>Comparatif prévision initiale / modèle</p>", unsafe_allow_html=True)
+if not budget_initial_df.empty:
     real_df_for_comp = pd.DataFrame({"date": valid_series.index, "value": valid_series.values})
-    parts = []
-    if not budget_initial_df.empty:
-        a = annual_comparison(real_df_for_comp, budget_initial_df).rename(columns={"Σ Prévu": "Σ Budget primitif saisonnalisé"})
-        parts.append(a[["Année", "Σ Budget primitif saisonnalisé"]])
-    if not budget_service_df.empty:
-        b = annual_comparison(real_df_for_comp, budget_service_df).rename(columns={"Σ Prévu": "Σ Prévision service saisonnalisée"})
-        parts.append(b[["Année", "Σ Prévision service saisonnalisée"]])
-    c = annual_comparison(real_df_for_comp, all_pred).rename(columns={"Σ Prévu": "Σ Prévision SARIMA"})[["Année", "Σ Réel", "Σ Prévision SARIMA", "Écart absolu", "Écart relatif %"]]
-    out = c
-    for part in parts:
-        out = out.merge(part, on="Année", how="left")
-    st.dataframe(out.style.format({col: fmt_euro for col in out.columns if col.startswith("Σ ")} | {"Écart absolu": fmt_euro, "Écart relatif %": "{:.2f}%"}), use_container_width=True)
+    budget_cmp = annual_comparison(real_df_for_comp, budget_initial_df).rename(
+        columns={"Σ Prévu": "Σ Budget primitif saisonnalisé", "Écart absolu": "Écart budget vs réel", "Écart relatif %": "Écart budget vs réel %"}
+    )
+    model_cmp = annual_comparison(real_df_for_comp, all_pred).rename(
+        columns={"Σ Prévu": "Σ Prévision SARIMA", "Écart absolu": "Écart modèle vs réel", "Écart relatif %": "Écart modèle vs réel %"}
+    )
+    out = budget_cmp[["Année", "Σ Réel", "Σ Budget primitif saisonnalisé", "Écart budget vs réel", "Écart budget vs réel %"]].merge(
+        model_cmp[["Année", "Σ Prévision SARIMA", "Écart modèle vs réel", "Écart modèle vs réel %"]],
+        on="Année",
+        how="left",
+    )
+    st.dataframe(
+        out.style.format({
+            "Σ Réel": fmt_euro,
+            "Σ Budget primitif saisonnalisé": fmt_euro,
+            "Σ Prévision SARIMA": fmt_euro,
+            "Écart budget vs réel": fmt_euro,
+            "Écart budget vs réel %": "{:.2f}%",
+            "Écart modèle vs réel": fmt_euro,
+            "Écart modèle vs réel %": "{:.2f}%",
+        }),
+        use_container_width=True,
+    )
 else:
-    st.info("Aucune colonne budget primitif / prévision cumulée exploitable trouvée dans le CSV filtré.")
+    st.info("Aucune colonne budget primitif exploitable trouvée dans le CSV filtré.")
 
 
 st.markdown("<p class='title'>Grid Search SARIMA</p>", unsafe_allow_html=True)

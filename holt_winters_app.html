@@ -68,7 +68,7 @@
       <p class="help">β élevé: tendance plus réactive. β faible: tendance plus lissée.</p>
       <div class="controls"><label>Gamma (γ)</label><input id="gamma" type="range" min="0.01" max="1" step="0.01" value="0.3"><input id="gammaNum" type="number" min="0.01" max="1" step="0.01" value="0.3"></div>
       <p class="help">γ élevé: saisonnalité adapte vite les motifs. γ faible: saisonnalité plus stable.</p>
-      <div class="controls"><label>Phi (φ)</label><input id="phi" type="range" min="0.5" max="1" step="0.01" value="0.98"><input id="phiNum" type="number" min="0.5" max="1" step="0.01" value="0.98"></div>
+      <div class="controls"><label>Phi (φ)</label><input id="phi" type="range" min="0" max="1" step="0.01" value="0.98"><input id="phiNum" type="number" min="0" max="1" step="0.01" value="0.98"></div>
       <p class="help">φ=1: tendance non amortie. φ&lt;1: tendance qui s'atténue dans le futur.</p>
       <div class="controls"><label>Agrégation</label><select id="aggregation"><option value="1">Mensuel</option><option value="3">Trimestriel</option><option value="4">Quadrimestriel</option><option value="6">Semestriel</option></select></div>
       <div class="controls"><label>Mode cumul</label><select id="cumulMode"><option value="civil">Année civile</option><option value="r12">R12 glissant</option></select></div>
@@ -375,7 +375,7 @@ function seasonalityWeightsFromParsed(){
   return sum>0?raw.map(v=>v/sum):Array(12).fill(1/12);
 }
 function seasonalizedBudgetSeries(weightInitial=0.7){
-  if(!filteredRows.length) return {initialMap:{}, serviceMap:{}};
+  if(!filteredRows.length) return {initialMap:{}};
   const weights=seasonalityWeightsFromParsed();
 
   // Agrégation correcte: somme des maxima par sous-compte (évite de compter 12 fois le même budget annuel)
@@ -398,34 +398,34 @@ function seasonalizedBudgetSeries(weightInitial=0.7){
     yearVals[y].adj += v.adj;
   });
 
-  const initialMap={}, serviceMap={};
+  const initialMap={};
   Object.entries(yearVals).forEach(([ys,v])=>{
-    const y=+ys; const service=weightInitial*v.bp + (1-weightInitial)*v.adj;
+    const y=+ys;
     for(let m=0;m<12;m++){
       const key=new Date(y,m,1).toISOString().slice(0,7);
       initialMap[key]=v.bp*weights[m];
-      serviceMap[key]=service*weights[m];
+      
     }
   });
-  return {initialMap, serviceMap};
+  return {initialMap};
 }
 function buildBudgetCompareTable(predMap, cutoffDate){
-  const {initialMap, serviceMap}=seasonalizedBudgetSeries(0.7);
+  const {initialMap}=seasonalizedBudgetSeries(0.7);
   const years=[...new Set(parsed.map(r=>r.date.getFullYear()))].sort((a,b)=>a-b);
   const realMap={}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
   const rows=years.map(y=>{
-    let real=0, ini=0, svc=0, model=0, covered=0;
+    let real=0, ini=0, model=0, covered=0;
     for(let m=0;m<12;m++){
       const key=new Date(y,m,1).toISOString().slice(0,7);
       if(realMap[key]!==undefined) real+=realMap[key];
       if(initialMap[key]!==undefined) ini+=initialMap[key];
-      if(serviceMap[key]!==undefined) svc+=serviceMap[key];
+      
       if(predMap[key]!==undefined){ model+=predMap[key]; covered++; }
     }
     if(covered===0) return null;
-    return {y, real, ini, svc, model};
+    return {y, real, ini, model};
   }).filter(Boolean);
-  budgetCompareTable.innerHTML='<tr><th>Année</th><th>Σ Réel</th><th>Σ Budget primitif saisonnalisé</th><th>Σ Prévision ajustée saisonnalisée</th><th>Σ Prévision modèle</th></tr>' + rows.map(r=>`<tr><td>${r.y}</td><td>${fmtMoney(r.real)}</td><td>${fmtMoney(r.ini)}</td><td>${fmtMoney(r.svc)}</td><td>${fmtMoney(r.model)}</td></tr>`).join('');
+  budgetCompareTable.innerHTML='<tr><th>Année</th><th>Σ Réel</th><th>Σ Budget primitif saisonnalisé</th><th>Σ Prévision modèle</th></tr>' + rows.map(r=>`<tr><td>${r.y}</td><td>${fmtMoney(r.real)}</td><td>${fmtMoney(r.ini)}</td><td><td>${fmtMoney(r.model)}</td></tr>`).join('');
 }
 
 
@@ -470,7 +470,7 @@ function recompute(){
   const labels = parsed.map(r=>monthLabel(r.date));
   const preReal = parsed.map((r,i)=> i<=cutoffIdx ? r.value : null);
   const postReal = parsed.map((r,i)=> i>cutoffIdx ? r.value : null);
-  const pred = Array(parsed.length + horizon).fill(null), low = Array(parsed.length + horizon).fill(null), high = Array(parsed.length + horizon).fill(null), budgetInit=Array(parsed.length + horizon).fill(null), budgetSvc=Array(parsed.length + horizon).fill(null);
+  const pred = Array(parsed.length + horizon).fill(null), low = Array(parsed.length + horizon).fill(null), high = Array(parsed.length + horizon).fill(null), budgetInit=Array(parsed.length + horizon).fill(null);
 
   for(let i=0;i<hw.fitted.length;i++) if(hw.fitted[i]!=null){ pred[i]=hw.fitted[i]; low[i]=Math.max(0, pred[i]*0.95); high[i]=pred[i]*1.05; }
   const extLabels=[...labels];
@@ -481,21 +481,19 @@ function recompute(){
   }
 
   const budgetMaps = seasonalizedBudgetSeries(0.7);
-  extLabels.forEach((_,i)=>{ const dt=i<parsed.length?parsed[i].date:addMonths(parsed[parsed.length-1].date,i-parsed.length+1); const key=dt.toISOString().slice(0,7); budgetInit[i]=budgetMaps.initialMap[key]??null; budgetSvc[i]=budgetMaps.serviceMap[key]??null; });
+  extLabels.forEach((_,i)=>{ const dt=i<parsed.length?parsed[i].date:addMonths(parsed[parsed.length-1].date,i-parsed.length+1); const key=dt.toISOString().slice(0,7); budgetInit[i]=budgetMaps.initialMap[key]??null; });
   const ag = aggregateSeries(extLabels, [...preReal,...Array(horizon).fill(null)], [...pred], [...low], [...high], agg);
   const budgetInitAg=aggregateSeries(extLabels, Array(extLabels.length).fill(null), [...budgetInit], [...low], [...high], agg);
-  const budgetSvcAg=aggregateSeries(extLabels, Array(extLabels.length).fill(null), [...budgetSvc], [...low], [...high], agg);
-  const postAg = aggregateSeries(extLabels, [...postReal,...Array(horizon).fill(null)], [...pred], [...low], [...high], agg);
+    const postAg = aggregateSeries(extLabels, [...postReal,...Array(horizon).fill(null)], [...pred], [...low], [...high], agg);
   if (chart) chart.destroy();
   chart = new Chart(document.getElementById('chart'), {
     type:'line', data:{ labels:ag.labels, datasets:[
-      {label:'Réel (pré-cutoff)', data:ag.real, borderColor:'#2f6db3', borderWidth:2, pointRadius:0},
-      {label:'Réel (post-cutoff)', data:postAg.real, borderColor:'#8eb6dd', borderDash:[6,4], borderWidth:2, pointRadius:0},
+      {label:'Réel (pré-cutoff)', data:ag.real, borderColor:'#2f6db3', borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'},
+      {label:'Réel (post-cutoff)', data:postAg.real, borderColor:'#8eb6dd', borderDash:[6,4], borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'},
       {label:'IC95% bas', data:ag.low, borderColor:'rgba(0,0,0,0)', pointRadius:0, fill:false},
       {label:'IC95%', data:ag.high, borderColor:'rgba(0,0,0,0)', backgroundColor:'rgba(120,120,120,.2)', pointRadius:0, fill:'-1'},
-      {label:'Budget primitif saisonnalisé', data:budgetInitAg.pred, borderColor:'#5b4bc4', borderDash:[2,4], borderWidth:2, pointRadius:0},
-      {label:'Prévision ajustée saisonnalisée', data:budgetSvcAg.pred, borderColor:'#7c4dff', borderDash:[6,4], borderWidth:2, pointRadius:0},
-      {label:'Prévision HW', data:ag.pred, borderColor:'#f07a24', borderWidth:2, pointRadius:0}
+      {label:'Budget primitif saisonnalisé', data:budgetInitAg.pred, borderColor:'#5b4bc4', borderDash:[2,4], borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'},
+            {label:'Prévision HW', data:ag.pred, borderColor:'#f07a24', borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'}
     ]},
     options:{ responsive:true, interaction:{mode:'index', intersect:false}, scales:{ y:{ ticks:{ callback:v=>frMoney.format(v) } } },
       plugins:{ legend:{position:'top'}, tooltip:{callbacks:{label:(ctx)=>`${ctx.dataset.label}: ${fmtMoney(ctx.raw)}`}},
@@ -506,7 +504,7 @@ function recompute(){
   const predMap = {}; pred.forEach((v,i)=>{ if(v==null) return; const dt=i<parsed.length?parsed[i].date:addMonths(parsed[parsed.length-1].date,i-parsed.length+1); predMap[dt.toISOString().slice(0,7)] = v;});
   const rows = cumulMode==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap);
   const headLabel = cumulMode==='r12' ? "Fenêtre" : "Année";
-  perfTable.innerHTML = `<tr><th>${headLabel}</th><th>Σ Réel</th><th>Σ Prévision</th><th>Écart abs.</th><th>Écart rel.</th></tr>` + rows.map(r=>`<tr class="${r.rel>5?'err-high':''}"><td>${cumulMode==='r12'?r.window:r.label}</td><td>${fmtMoney(r.real)}</td><td>${fmtMoney(r.pred)}</td><td>${fmtMoney(r.abs)}</td><td>${r.rel.toFixed(2)}%</td></tr>`).join('');
+  perfTable.innerHTML = `<tr><th>${headLabel}</th><th>Σ Réel</th><th>Σ Prévision modèle</th><th>Écart modèle vs réel</th><th>Écart modèle vs réel %</th></tr>` + rows.map(r=>`<tr class="${r.rel>5?'err-high':''}"><td>${cumulMode==='r12'?r.window:r.label}</td><td>${fmtMoney(r.real)}</td><td>${fmtMoney(r.pred)}</td><td>${fmtMoney(r.abs)}</td><td>${r.rel.toFixed(2)}%</td></tr>`).join('');
   buildProjectionTable(cutoffIdx, hw.forecasts);
   buildBudgetCompareTable(predMap, parsed[cutoffIdx].date);
   buildHwInsights();
@@ -531,8 +529,15 @@ async function runGrid(){
       const predMap={}; hw.fitted.forEach((v,i)=>{ if(v!=null) predMap[parsed[i].date.toISOString().slice(0,7)] = v; });
       for(let h=1; h<=monthsAfterCutoff; h++) predMap[addMonths(parsed[cutoffIdx].date,h).toISOString().slice(0,7)] = hw.forecasts[h-1];
       const years = (cumulModeEl.value==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap)).filter(r=>checks.includes(String(r.year)));
+      // Garde-fous anti-overfit/explosion: on rejette les combinaisons instables.
+      const trainVals = fitSeries.map(x=>x.value);
+      const trainMean = trainVals.reduce((x,y)=>x+y,0)/Math.max(1,trainVals.length);
+      const maxPred = Math.max(...Object.values(predMap));
+      const minPred = Math.min(...Object.values(predMap));
+      const absurdScale = maxPred > trainMean * 8 || minPred < -Math.abs(trainMean) * 2;
+      const perYearHuge = years.some(r=>r.rel > 120);
       const score = years.length ? years.reduce((x,r)=>x+r.rel,0) : Infinity;
-      if (Number.isFinite(score)) { top.push({a,b,g,score}); top.sort((x,y)=>x.score-y.score); if(top.length>5) top.pop(); }
+      if (Number.isFinite(score) && !absurdScale && !perYearHuge) { top.push({a,b,g,score}); top.sort((x,y)=>x.score-y.score); if(top.length>5) top.pop(); }
     }
     done++; progressBar.style.width=`${(100*done/total).toFixed(1)}%`;
   }} await new Promise(r=>setTimeout(r,0)); }
