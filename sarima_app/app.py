@@ -260,7 +260,11 @@ with st.sidebar:
     st.caption("Q (MA saisonnier): absorbe les chocs saisonniers récurrents.")
 
     min_cut = valid_series.index[23]
-    max_cut = valid_series.index[-1]
+    # Le cutoff doit aller jusqu'au dernier mois réellement présent dans les lignes filtrées
+    # (même si la série asfreq/dropna peut tronquer visuellement la fin).
+    max_cut = pd.Timestamp(scoped["date"].max()).replace(day=1)
+    if max_cut < min_cut:
+        max_cut = valid_series.index[-1]
     cutoff = pd.Timestamp(st.slider("Cutoff", min_value=min_cut.to_pydatetime(), max_value=max_cut.to_pydatetime(), value=max_cut.to_pydatetime(), format="MM/YYYY")).replace(day=1)
     horizon = st.slider("Horizon (mois)", 1, 36, 12)
 
