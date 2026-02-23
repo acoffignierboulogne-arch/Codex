@@ -104,13 +104,22 @@ def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, meth
     if "budget_primitif" not in scoped_df.columns and "prevision_cumulee" not in scoped_df.columns:
         return pd.Series(dtype=float), pd.Series(dtype=float)
 
+    base = scoped_df.dropna(subset=["date"]).copy()
+    base["year"] = pd.to_datetime(base["date"]).dt.year
+
+    # Agrégation correcte du budget annuel: somme des sous-ensembles (ex: sous-comptes)
+    # en évitant de recompter 12 fois la même ligne mensuelle.
+    key_col = "sous_compte" if "sous_compte" in base.columns else ("compte_execution" if "compte_execution" in base.columns else "titre")
     yearly = (
-        scoped_df.dropna(subset=["date"])
-        .assign(year=lambda d: pd.to_datetime(d["date"]).dt.year)
-        .groupby("year", as_index=True)
+        base.groupby(["year", key_col], as_index=False)
         .agg(
             budget_primitif=("budget_primitif", "max"),
             prevision_cumulee=("prevision_cumulee", "max"),
+        )
+        .groupby("year", as_index=True)
+        .agg(
+            budget_primitif=("budget_primitif", "sum"),
+            prevision_cumulee=("prevision_cumulee", "sum"),
         )
         .fillna(0.0)
     )
@@ -118,6 +127,10 @@ def _monthly_budget_series(scoped_df: pd.DataFrame, real_series: pd.Series, meth
         return pd.Series(dtype=float), pd.Series(dtype=float)
 
     hist = real_series.dropna()
+    # Stabilisation demandée: préférer une base saisonnière figée jusqu'à fin 2024.
+    hist_2024 = hist[hist.index <= pd.Timestamp("2024-12-01")]
+    if len(hist_2024) >= 12:
+        hist = hist_2024
     if len(hist) < 12:
         return pd.Series(dtype=float), pd.Series(dtype=float)
 

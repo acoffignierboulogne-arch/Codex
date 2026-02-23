@@ -368,7 +368,8 @@ function buildProjectionTable(cutoffIdx, forecasts){
 
 function seasonalityWeightsFromParsed(){
   const byMonth=Array(12).fill(0), cnt=Array(12).fill(0);
-  parsed.forEach(r=>{ const m=r.date.getMonth(); byMonth[m]+=Math.max(0,r.value); cnt[m]++; });
+  const base = parsed.some(r=>r.date.getFullYear()<=2024) ? parsed.filter(r=>r.date.getFullYear()<=2024) : parsed;
+  base.forEach(r=>{ const m=r.date.getMonth(); byMonth[m]+=Math.max(0,r.value); cnt[m]++; });
   const raw=byMonth.map((v,i)=>cnt[i]?v/cnt[i]:0);
   const sum=raw.reduce((a,b)=>a+b,0);
   return sum>0?raw.map(v=>v/sum):Array(12).fill(1/12);
@@ -376,8 +377,26 @@ function seasonalityWeightsFromParsed(){
 function seasonalizedBudgetSeries(weightInitial=0.7){
   if(!filteredRows.length) return {initialMap:{}, serviceMap:{}};
   const weights=seasonalityWeightsFromParsed();
+
+  // Agrégation correcte: somme des maxima par sous-compte (évite de compter 12 fois le même budget annuel)
+  const byYearKey={};
+  filteredRows.forEach(r=>{
+    const y=r.date.getFullYear();
+    const key = (r.sous && r.sous !== '(vide)') ? r.sous : ((r.compte && r.compte !== '(vide)') ? r.compte : r.titre);
+    const k=`${y}__${key}`;
+    if(!byYearKey[k]) byYearKey[k]={year:y, bp:0, adj:0};
+    byYearKey[k].bp = Math.max(byYearKey[k].bp, Number(r.budgetPrimitif||0));
+    byYearKey[k].adj = Math.max(byYearKey[k].adj, Number(r.previsionCumulee||0));
+  });
+
   const yearVals={};
-  filteredRows.forEach(r=>{ const y=r.date.getFullYear(); yearVals[y]=yearVals[y]||{bp:0,adj:0}; yearVals[y].bp=Math.max(yearVals[y].bp, Number(r.budgetPrimitif||0)); yearVals[y].adj=Math.max(yearVals[y].adj, Number(r.previsionCumulee||0)); });
+  Object.values(byYearKey).forEach(v=>{
+    const y=v.year;
+    yearVals[y]=yearVals[y]||{bp:0,adj:0};
+    yearVals[y].bp += v.bp;
+    yearVals[y].adj += v.adj;
+  });
+
   const initialMap={}, serviceMap={};
   Object.entries(yearVals).forEach(([ys,v])=>{
     const y=+ys; const service=weightInitial*v.bp + (1-weightInitial)*v.adj;
