@@ -129,6 +129,8 @@ def compute_backtest_scores(
         except Exception as exc:  # noqa: BLE001
             logs.append(f"Backtest fold ignoré {order}x{seasonal_order} origin={train.index[-1].date()} : {exc}")
             continue
+        if np.any(~np.isfinite(yhat)) or np.any(yhat < 0):
+            return {"ok": False, "reason": "prévisions négatives", "folds": folds}
 
         origin_date = train.index[-1]
         folds += 1
@@ -323,6 +325,29 @@ def _residual_diagnostics(
     }
 
 
+
+
+def _series_feature_diagnostics(series: pd.Series, seasonal_period: int) -> pd.DataFrame:
+    s = series.dropna().sort_index().asfreq("MS")
+    if len(s) < 24:
+        return pd.DataFrame([
+            {"feature": "history_months", "value": len(s), "interpretation": "Historique court: privilégier des modèles simples (p,q,P,Q faibles)."}
+        ])
+
+    trend_strength = float(abs(s.rolling(12, min_periods=12).mean().diff().dropna().mean() or 0) / max(abs(float(s.mean())), 1e-9))
+    seasonal_profile = s.groupby(s.index.month).mean()
+    seasonal_strength = float(seasonal_profile.std(ddof=0) / max(abs(float(s.mean())), 1e-9))
+    volatility_ratio = float(s.diff().abs().mean() / max(abs(float(s.mean())), 1e-9))
+    zero_share = float((s <= 1e-9).mean())
+
+    return pd.DataFrame([
+        {"feature": "history_months", "value": len(s), "interpretation": "Plus l'historique est long, plus on peut tolérer des ordres modérés."},
+        {"feature": "trend_strength", "value": trend_strength, "interpretation": "Tendance élevée: d=1 est souvent pertinent; tendance faible: d=0 possible."},
+        {"feature": "seasonality_strength", "value": seasonal_strength, "interpretation": "Saisonnalité forte: tester P/Q saisonniers; faible: rester parcimonieux."},
+        {"feature": "volatility_ratio", "value": volatility_ratio, "interpretation": "Volatilité élevée: éviter les ordres trop hauts pour limiter l'instabilité."},
+        {"feature": "zero_or_quasi_zero_share", "value": zero_share, "interpretation": "Présence de zéros: privilégier sMAPE côté lecture d'erreur et prudence sur MA."},
+    ])
+
 def _build_ui_text() -> dict[str, str]:
     return {
         "explain_stationarity": "Les tests de stationnarité servent de repère: on vérifie si la série brute ou différenciée devient plus stable dans le temps.",
@@ -331,6 +356,7 @@ def _build_ui_text() -> dict[str, str]:
         "explain_why_penalty": "Un modèle avec bons scores mais résidus autocorrélés peut être fragile. On applique une pénalisation douce pour privilégier les modèles plus robustes.",
         "explain_monthly_vs_r12_vs_annual": "Un modèle peut être excellent au mois mais se tromper sur les cumuls: R12 mesure la trajectoire glissante, annuel mesure l'atterrissage budgétaire de l'année civile.",
         "explain_why_annual_moves_in_S1": "En S1, le total annuel est sensible car beaucoup de mois restent à prévoir. En S2, le YTD réel pèse davantage, donc l'estimation se stabilise mécaniquement.",
+        "explain_param_guide": "Guide de calibration: tendance forte => d=1; saisonnalité forte => activer P/Q saisonniers; volatilité forte => rester parcimonieux sur p/q pour éviter des prévisions instables.",
     }
 
 
@@ -339,6 +365,7 @@ def select_sarima_params(series: pd.Series, cfg: SarimaSelectionConfig) -> dict[
     s = series.dropna().sort_index().asfreq("MS")
 
     stationarity_df = _stationarity_tests(s, cfg.seasonal_period)
+    feature_diagnostics_df = _series_feature_diagnostics(s, cfg.seasonal_period)
 
     candidate_rows: list[dict[str, Any]] = []
     residual_by_candidate: dict[str, dict[str, Any]] = {}
@@ -398,6 +425,7 @@ def select_sarima_params(series: pd.Series, cfg: SarimaSelectionConfig) -> dict[
             "best": {"annual": None, "monthly": None, "r12": None},
             "candidates_table": pd.DataFrame(),
             "stationarity_tests": stationarity_df,
+            "series_feature_diagnostics": feature_diagnostics_df,
             "residual_diagnostics": {"by_candidate": residual_by_candidate},
             "ui_text": _build_ui_text(),
             "logs": logs,
@@ -432,6 +460,7 @@ def select_sarima_params(series: pd.Series, cfg: SarimaSelectionConfig) -> dict[
         },
         "candidates_table": out_df,
         "stationarity_tests": stationarity_df,
+        "series_feature_diagnostics": feature_diagnostics_df,
         "residual_diagnostics": {"by_candidate": residual_by_candidate},
         "ui_text": _build_ui_text(),
         "logs": logs,
