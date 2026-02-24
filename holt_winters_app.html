@@ -395,7 +395,7 @@ function rollingOriginBacktestMetrics(series, params, maxOrigins=36){
   const folds=[];
   const lastOrigin=series.length-2;
   const firstOrigin=minTrain-1;
-  if(lastOrigin<firstOrigin) return {folds:[], monthlyByH:new Map(), monthlyAll:{actual:[],pred:[]}, r12All:{actual:[],pred:[]}, annualAll:{actual:[],pred:[]}, annualByMonth:Array.from({length:12},()=>({actual:[],pred:[]}))};
+  if(lastOrigin<firstOrigin) return {folds:[], hasNegativeForecast:false, monthlyByH:new Map(), monthlyAll:{actual:[],pred:[]}, r12All:{actual:[],pred:[]}, annualAll:{actual:[],pred:[]}, annualByMonth:Array.from({length:12},()=>({actual:[],pred:[]}))};
   const candidates=[];
   for(let t=firstOrigin;t<=lastOrigin;t++) candidates.push(t);
   const origins=candidates.slice(Math.max(0,candidates.length-maxOrigins));
@@ -415,6 +415,9 @@ function rollingOriginBacktestMetrics(series, params, maxOrigins=36){
     if(fcHorizon<1) continue;
     const fit=fitHoltWinters(train,alpha,beta,gamma,phi,mode,horizon);
     if(!fit) continue;
+    if(fit.forecasts.some(v=>!Number.isFinite(v) || v<0)){
+      return {folds, hasNegativeForecast:true, monthlyByH, monthlyAll, r12All, annualAll, annualByMonth};
+    }
 
     const foldPredMap={};
     for(let h=1; h<=fcHorizon; h++) foldPredMap[makeMonthKey(addMonths(series[originIdx].date,h))]=fit.forecasts[h-1];
@@ -472,7 +475,7 @@ function rollingOriginBacktestMetrics(series, params, maxOrigins=36){
     }
   }
 
-  return {folds, monthlyByH, monthlyAll, r12All, annualAll, annualByMonth};
+  return {folds, hasNegativeForecast:false, monthlyByH, monthlyAll, r12All, annualAll, annualByMonth};
 }
 
 function summarizeMetricBucket(bucket){
@@ -729,43 +732,51 @@ async function runGrid(){
   if (!checks.length) { alert('Sélectionnez au moins une année cible.'); return; }
   const range = (min,max,step)=>{ if(step<=0||max<min) return []; const out=[]; for(let x=min; x<=max+1e-9; x+=step) out.push(+x.toFixed(4)); return out; };
   const as=range(+aMin.value,+aMax.value,+aStep.value), bs=range(+bMin.value,+bMax.value,+bStep.value), gs=range(+gMin.value,+gMax.value,+gStep.value);
-  const total = as.length*bs.length*gs.length; if(!total){ gridResult.textContent='Paramètres de grille invalides.'; return; }
+
+  let combos=[];
+  for(const a of as){ for(const b of bs){ for(const g of gs){ combos.push({a,b,g}); }}}
+  const HARD_CAP=240;
+  if(combos.length>HARD_CAP){
+    combos=combos.slice(0,HARD_CAP);
+    gridResult.textContent=`Grille volumineuse détectée: limitation automatique à ${HARD_CAP} combinaisons pour éviter le blocage navigateur.`;
+  }
+  const total = combos.length; if(!total){ gridResult.textContent='Paramètres de grille invalides.'; return; }
 
   const cutoffIdx=+cutoffEl.value, mode=modeEl.value, phi=+phiEl.value, fitSeries=parsed.slice(0,cutoffIdx+1), monthsAfterCutoff=Math.max(1, parsed.length-cutoffIdx-1), validationMode=validationModeEl.value;
   const rollingMetric=rollingMetricEl.value;
   const realMap={}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
-  gridRunning=true; gridBtn.disabled=true; progressBar.style.width='0%'; top5.innerHTML=''; gridResult.textContent=`Calcul en cours (${total} combinaisons)...`;
+  gridRunning=true; gridBtn.disabled=true; progressBar.style.width='0%'; top5.innerHTML='';
+  if(!gridResult.textContent.includes('limitation automatique')) gridResult.textContent=`Calcul en cours (${total} combinaisons)...`;
 
   const top=[]; let done=0;
-  for(const a of as){ for(const b of bs){ for(const g of gs){
+  for(const cmb of combos){
+    const {a,b,g}=cmb;
     const hw=fitHoltWinters(fitSeries,a,b,g,phi,mode,monthsAfterCutoff);
     if(hw){
       let score=Infinity, scoreCount=0, diagnostic='';
-      let annualByMonthTable='';
       if(validationMode==='rolling'){
         const bt=rollingOriginBacktestMetrics(parsed,{alpha:a,beta:b,gamma:g,phi,mode},24);
-        const monthlySummary=summarizeMetricBucket(bt.monthlyAll);
-        const r12Summary=summarizeMetricBucket(bt.r12All);
-        const annualSummary=summarizeMetricBucket(bt.annualAll);
-        scoreCount = rollingMetric==='monthly' ? monthlySummary.count : (rollingMetric==='r12' ? r12Summary.count : annualSummary.count);
-        score = rollingMetric==='monthly' ? monthlySummary.rmse : (rollingMetric==='r12' ? r12Summary.rmse : annualSummary.rmse);
-
-        const monthRows = bt.annualByMonth.map((bkt,idx)=>{
-          const s=summarizeMetricBucket(bkt);
-          if(!s.count) return '';
-          const rel = Number.isFinite(s.mape) ? `${s.mape.toFixed(2)}%` : `${s.smape.toFixed(2)}% (sMAPE)`;
-          return `<tr><td>${idx+1}</td><td>${s.count}</td><td>${fmtMoney(s.mae)}</td><td>${rel}</td></tr>`;
-        }).filter(Boolean).join('');
-        annualByMonthTable = monthRows ? `<br><span class="muted">Erreur total annuel par mois d'origine (best):</span><table><tr><th>Mois origine</th><th>n</th><th>MAE total annuel</th><th>Erreur relative</th></tr>${monthRows}</table>` : '';
-        diagnostic = `rolling ${rollingMetric} | folds=${bt.folds.length}`;
+        if(!bt.hasNegativeForecast){
+          const monthlySummary=summarizeMetricBucket(bt.monthlyAll);
+          const r12Summary=summarizeMetricBucket(bt.r12All);
+          const annualSummary=summarizeMetricBucket(bt.annualAll);
+          scoreCount = rollingMetric==='monthly' ? monthlySummary.count : (rollingMetric==='r12' ? r12Summary.count : annualSummary.count);
+          score = rollingMetric==='monthly' ? monthlySummary.rmse : (rollingMetric==='r12' ? r12Summary.rmse : annualSummary.rmse);
+          diagnostic = `rolling ${rollingMetric} | folds=${bt.folds.length}`;
+        } else {
+          diagnostic='rejeté: prévision négative';
+        }
       } else {
-        const scoreYears=[];
         const predMap={}; hw.fitted.forEach((v,i)=>{ if(v!=null) predMap[parsed[i].date.toISOString().slice(0,7)] = v; });
         for(let h=1; h<=monthsAfterCutoff; h++) predMap[addMonths(parsed[cutoffIdx].date,h).toISOString().slice(0,7)] = hw.forecasts[h-1];
-        scoreYears.push(...(cumulModeEl.value==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap)).filter(r=>checks.includes(String(r.year))));
-        score=scoreYears.length ? scoreYears.reduce((x,r)=>x+r.rel,0) : Infinity;
-        scoreCount=scoreYears.length;
-        diagnostic = `cutoff courant | années=${scoreYears.length}`;
+        if(hw.forecasts.some(v=>!Number.isFinite(v)||v<0)){
+          diagnostic='rejeté: prévision négative';
+        } else {
+          const scoreYears=(cumulModeEl.value==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap)).filter(r=>checks.includes(String(r.year)));
+          score=scoreYears.length ? scoreYears.reduce((x,r)=>x+r.rel,0) : Infinity;
+          scoreCount=scoreYears.length;
+          diagnostic = `cutoff courant | années=${scoreYears.length}`;
+        }
       }
 
       const trainVals = fitSeries.map(x=>x.value);
@@ -774,19 +785,31 @@ async function runGrid(){
       const minForecast = Math.min(...hw.forecasts);
       const absurdScale = maxForecast > trainMean * 8 || minForecast < -Math.abs(trainMean) * 2;
       if (Number.isFinite(score) && scoreCount>0 && !absurdScale) {
-        top.push({a,b,g,score,diagnostic,annualByMonthTable});
+        top.push({a,b,g,score,diagnostic});
         top.sort((x,y)=>x.score-y.score);
         if(top.length>5) top.pop();
       }
     }
     done++; progressBar.style.width=`${(100*done/total).toFixed(1)}%`;
-  }} await new Promise(r=>setTimeout(r,0)); }
+    if(done % 4 === 0) await new Promise(r=>setTimeout(r,0));
+  }
 
-  if (!top.length){ gridResult.textContent='Aucune combinaison valide pour le mode/métrique sélectionné(e).'; applyBest.disabled=true; }
+  if (!top.length){ gridResult.textContent='Aucune combinaison valide (contraintes: non-négativité + stabilité).'; applyBest.disabled=true; }
   else {
     lastBest=top[0];
+    let annualByMonthTable='';
+    if(validationMode==='rolling'){
+      const btBest=rollingOriginBacktestMetrics(parsed,{alpha:lastBest.a,beta:lastBest.b,gamma:lastBest.g,phi,mode},24);
+      const monthRows = btBest.annualByMonth.map((bkt,idx)=>{
+        const s=summarizeMetricBucket(bkt);
+        if(!s.count) return '';
+        const rel = Number.isFinite(s.mape) ? `${s.mape.toFixed(2)}%` : `${s.smape.toFixed(2)}% (sMAPE)`;
+        return `<tr><td>${idx+1}</td><td>${s.count}</td><td>${fmtMoney(s.mae)}</td><td>${rel}</td></tr>`;
+      }).filter(Boolean).join('');
+      annualByMonthTable = monthRows ? `<br><span class="muted">Erreur total annuel par mois d'origine (best):</span><table><tr><th>Mois origine</th><th>n</th><th>MAE total annuel</th><th>Erreur relative</th></tr>${monthRows}</table>` : '';
+    }
     const scoreLabel = validationMode==='rolling' ? `score RMSE (${rollingMetric})` : 'score cumulé';
-    gridResult.innerHTML=`Meilleur: α=${lastBest.a}, β=${lastBest.b}, γ=${lastBest.g} | ${scoreLabel}=${lastBest.score.toFixed(3)}<br><span class="muted">${lastBest.diagnostic}</span>${lastBest.annualByMonthTable}`;
+    gridResult.innerHTML=`Meilleur: α=${lastBest.a}, β=${lastBest.b}, γ=${lastBest.g} | ${scoreLabel}=${lastBest.score.toFixed(3)}<br><span class="muted">${lastBest.diagnostic} | contrainte non-négativité active</span>${annualByMonthTable}`;
     applyBest.disabled=false;
     top5.innerHTML='<tr><th>Rang</th><th>α</th><th>β</th><th>γ</th><th>Score</th><th>Contexte</th></tr>'+top.map((r,i)=>`<tr><td>${i+1}</td><td>${r.a}</td><td>${r.b}</td><td>${r.g}</td><td>${r.score.toFixed(3)}</td><td>${r.diagnostic}</td></tr>`).join('');
   }

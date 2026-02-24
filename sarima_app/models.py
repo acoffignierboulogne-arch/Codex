@@ -134,6 +134,8 @@ class SarimaForecaster:
                 start_date=split_train.index[-1] + pd.offsets.MonthBegin(1),
                 horizon=horizon,
             )[["date", "value"]]
+            if (forecast_df["value"] < 0).any():
+                return None
             pred_df_local = pd.concat(
                 [
                     pd.DataFrame({"date": in_sample.index, "value": in_sample.values}),
@@ -167,6 +169,15 @@ class SarimaForecaster:
                 continue
 
             score = float(fit.aic)
+            # Contrainte métier: rejeter tout candidat avec prévisions négatives au-delà du cutoff.
+            test_fc = SarimaForecaster.forecast(
+                fit.model_fit,
+                start_date=train_series.index[-1] + pd.offsets.MonthBegin(1),
+                horizon=max(1, len(reference_series.dropna()) - len(train_series.dropna())),
+            )
+            if (test_fc["value"] < 0).any():
+                continue
+
             if criterion == "Écart annuel cumulé":
                 target_years_list = sorted(int(y) for y in target_years)
                 if not target_years_list:
