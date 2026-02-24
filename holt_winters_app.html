@@ -296,11 +296,33 @@ function fitHoltWinters(series, alpha, beta, gamma, phi, mode, horizon){
 
 function aggregateSeries(labels, dates, real, pred, low, high, step){
   if (step===1) return {labels, dates, real, pred, low, high};
-  const out = {labels:[], dates:[], real:[], pred:[], low:[], high:[]};
-  for(let i=0;i<labels.length;i+=step){
-    const chunk = arr => arr.slice(i,i+step).reduce((a,b)=>a+(b??0),0);
-    out.labels.push(labels[i]); out.dates.push(dates[i]); out.real.push(chunk(real)); out.pred.push(chunk(pred)); out.low.push(chunk(low)); out.high.push(chunk(high));
+
+  const buckets = new Map();
+  for(let i=0;i<dates.length;i++){
+    const d=dates[i];
+    const year=d.getFullYear();
+    const block=Math.floor(d.getMonth()/step); // ancré janvier
+    const key=`${year}-${block}`;
+    if(!buckets.has(key)) buckets.set(key,{year, block, idx:[]});
+    buckets.get(key).idx.push(i);
   }
+
+  const sumNullable = (arr, idx) => {
+    const vals=idx.map(i=>arr[i]).filter(v=>v!==null && v!==undefined && Number.isFinite(v));
+    if(!vals.length) return null;
+    return vals.reduce((a,b)=>a+b,0);
+  };
+
+  const out = {labels:[], dates:[], real:[], pred:[], low:[], high:[]};
+  [...buckets.values()].sort((a,b)=>a.year-b.year || a.block-b.block).forEach(b=>{
+    const startDate=new Date(b.year, b.block*step, 1);
+    out.labels.push(monthLabel(startDate));
+    out.dates.push(startDate);
+    out.real.push(sumNullable(real,b.idx));
+    out.pred.push(sumNullable(pred,b.idx));
+    out.low.push(sumNullable(low,b.idx));
+    out.high.push(sumNullable(high,b.idx));
+  });
   return out;
 }
 
@@ -638,7 +660,7 @@ function recompute(){
 
   const labels = parsed.map(r=>monthLabel(r.date));
   const preReal = parsed.map((r,i)=> i<=cutoffIdx ? r.value : null);
-  const postReal = parsed.map((r,i)=> i>cutoffIdx ? r.value : null);
+  const postReal = parsed.map((r,i)=> i>=cutoffIdx ? r.value : null);
   const pred = Array(parsed.length + horizon).fill(null), low = Array(parsed.length + horizon).fill(null), high = Array(parsed.length + horizon).fill(null), budgetInit=Array(parsed.length + horizon).fill(null);
 
   for(let i=0;i<hw.fitted.length;i++) if(hw.fitted[i]!=null){ pred[i]=hw.fitted[i]; low[i]=Math.max(0, pred[i]*0.95); high[i]=pred[i]*1.05; }
