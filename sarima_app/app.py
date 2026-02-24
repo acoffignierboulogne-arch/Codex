@@ -373,6 +373,8 @@ if scoped.empty:
 
 df = scoped.groupby("date", as_index=False)["value"].sum().sort_values("date")
 series = pd.Series(df["value"].values, index=pd.DatetimeIndex(df["date"]), name="value")
+# Normalisation explicite en période mensuelle (clôture fin de mois, indexée sur le mois civil).
+series.index = series.index.to_period("M").to_timestamp("MS")
 series = series[~series.index.duplicated(keep="last")].asfreq("MS")
 valid_series = series.dropna()
 if len(valid_series) < 24:
@@ -383,6 +385,7 @@ st.caption(
     f"Filtre actif — Flux: {selected_flux} | Lignes retenues: {len(scoped):,} | "
     f"Période: {scoped['date'].min().strftime('%m/%Y')} → {scoped['date'].max().strftime('%m/%Y')}"
 )
+st.caption("Convention temporelle: chaque point mensuel correspond à la clôture du mois (ex: mars = fin mars).")
 
 with st.sidebar:
     st.subheader("Paramètres SARIMA")
