@@ -132,6 +132,7 @@ function fmtMoney(v) { return `${frMoney.format(v || 0)} €`; }
 function monthLabel(d) { return frMonth.format(d).replace('.', ''); }
 function toMonthStart(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
+function monthKeyLocal(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
 function dampedSum(phi, h){ return Math.abs(phi - 1) < 1e-9 ? h : (phi * (1 - Math.pow(phi, h)) / (1 - phi)); }
 
 function fixMojibake(str){
@@ -224,7 +225,7 @@ function applyFilters(){
     (lib==='__ALL__' || r.libelle===lib)
   );
   const dedup = new Map();
-  filteredRows.forEach(r=>{ const k=r.date.toISOString().slice(0,7); dedup.set(k,(dedup.get(k)||0)+r.value);});
+  filteredRows.forEach(r=>{ const k=monthKeyLocal(r.date); dedup.set(k,(dedup.get(k)||0)+r.value);});
   parsed=[...dedup.entries()].map(([k,v])=>({date:new Date(k+'-01'), value:v, previsionCumulee:null, budgetPrimitif:null})).sort((a,b)=>a.date-b.date);
   const fi=document.getElementById('filterInfo');
   fi.textContent=`Filtre actif: ${flux} | ${titre==='__ALL__'?'Tous titres':titre} | ${chap==='__ALL__'?'Tous chapitres':chap}`;
@@ -347,7 +348,7 @@ function computeR12(realMap, predMap, cutoffDate){
     let r=0, p=0, covered=0;
     for(let i=0;i<12;i++){
       const d = new Date(start.getFullYear(), start.getMonth()+i, 1);
-      const key = d.toISOString().slice(0,7);
+      const key = monthKeyLocal(d);
       if(realMap[key]!==undefined && predMap[key]!==undefined){
         r += realMap[key]; p += predMap[key]; covered++;
       }
@@ -386,7 +387,7 @@ function addMetricBucket(target, actual, pred){
   target.actual.push(actual); target.pred.push(pred);
 }
 
-function makeMonthKey(d){ return d.toISOString().slice(0,7); }
+function makeMonthKey(d){ return monthKeyLocal(d); }
 
 function rollingOriginBacktestMetrics(series, params, maxOrigins=36){
   const {alpha,beta,gamma,phi,mode}=params;
@@ -490,12 +491,12 @@ function buildProjectionTable(cutoffIdx, forecasts){
   const years = [];
   for (let y=parsed[0].date.getFullYear(); y<=end.getFullYear(); y++) years.push(y);
 
-  const realMap = {}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
+  const realMap = {}; parsed.forEach(r=>realMap[monthKeyLocal(r.date)] = r.value);
   const rows = years.map(year=>{
     let realCum=0, projCum=0, months=0;
     for(let m=0;m<12;m++){
       const dt = new Date(year,m,1);
-      const key = dt.toISOString().slice(0,7);
+      const key = monthKeyLocal(dt);
       const idx = (year - parsed[cutoffIdx].date.getFullYear())*12 + (m - parsed[cutoffIdx].date.getMonth()) - 1;
       const real = realMap[key];
       if (real!==undefined) realCum += real;
@@ -596,7 +597,7 @@ function seasonalizedBudgetSeries(weightInitial=0.7){
   Object.entries(yearVals).forEach(([ys,v])=>{
     const y=+ys;
     for(let m=0;m<12;m++){
-      const key=new Date(y,m,1).toISOString().slice(0,7);
+      const key=monthKeyLocal(new Date(y,m,1));
       initialMap[key]=v.bp*weights[m];
       
     }
@@ -606,11 +607,11 @@ function seasonalizedBudgetSeries(weightInitial=0.7){
 function buildBudgetCompareTable(predMap, cutoffDate){
   const {initialMap}=seasonalizedBudgetSeries(0.7);
   const years=[...new Set(parsed.map(r=>r.date.getFullYear()))].sort((a,b)=>a-b);
-  const realMap={}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
+  const realMap={}; parsed.forEach(r=>realMap[monthKeyLocal(r.date)] = r.value);
   const rows=years.map(y=>{
     let real=0, ini=0, model=0, covered=0;
     for(let m=0;m<12;m++){
-      const key=new Date(y,m,1).toISOString().slice(0,7);
+      const key=monthKeyLocal(new Date(y,m,1));
       if(realMap[key]!==undefined) real+=realMap[key];
       if(initialMap[key]!==undefined) ini+=initialMap[key];
       
@@ -677,7 +678,7 @@ function recompute(){
   }
 
   const budgetMaps = seasonalizedBudgetSeries(0.7);
-  extLabels.forEach((_,i)=>{ const dt=extDates[i]; const key=dt.toISOString().slice(0,7); budgetInit[i]=budgetMaps.initialMap[key]??null; });
+  extLabels.forEach((_,i)=>{ const dt=extDates[i]; const key=monthKeyLocal(dt); budgetInit[i]=budgetMaps.initialMap[key]??null; });
   const ag = aggregateSeries(extLabels, extDates, [...preReal,...Array(horizon).fill(null)], [...pred], [...low], [...high], agg);
   const budgetInitAg=aggregateSeries(extLabels, extDates, Array(extLabels.length).fill(null), [...budgetInit], [...low], [...high], agg);
   const postAg = aggregateSeries(extLabels, extDates, [...postReal,...Array(horizon).fill(null)], [...pred], [...low], [...high], agg);
@@ -706,15 +707,15 @@ function recompute(){
     chart.update('none');
   }
 
-  const realMap = {}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
-  const predMap = {}; pred.forEach((v,i)=>{ if(v==null) return; const dt=i<parsed.length?parsed[i].date:addMonths(parsed[parsed.length-1].date,i-parsed.length+1); predMap[dt.toISOString().slice(0,7)] = v;});
+  const realMap = {}; parsed.forEach(r=>realMap[monthKeyLocal(r.date)] = r.value);
+  const predMap = {}; pred.forEach((v,i)=>{ if(v==null) return; const dt=i<parsed.length?parsed[i].date:addMonths(parsed[parsed.length-1].date,i-parsed.length+1); predMap[monthKeyLocal(dt)] = v;});
   const rows = cumulMode==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap);
   const headLabel = cumulMode==='r12' ? "Fenêtre" : "Année";
   if(cumulMode==='civil'){
     const budgetMap=budgetMaps.initialMap;
     perfTable.innerHTML = `<tr><th>${headLabel}</th><th>Σ Réel</th><th>Σ Prévision modèle</th><th>Σ Budget primitif</th><th>Écart modèle vs réel</th><th>Écart modèle %</th><th>Écart budget vs réel</th><th>Écart budget %</th></tr>` + rows.map(r=>{
       const y=+r.year; let budget=0;
-      for(let m=0;m<12;m++){ const key=new Date(y,m,1).toISOString().slice(0,7); budget += Number(budgetMap[key]||0); }
+      for(let m=0;m<12;m++){ const key=monthKeyLocal(new Date(y,m,1)); budget += Number(budgetMap[key]||0); }
       const bAbs=Math.abs(r.real-budget), bRel=r.real===0?0:bAbs/Math.abs(r.real)*100;
       return `<tr class="${Math.min(r.rel,bRel)>5?'err-high':''}"><td>${r.label}</td><td>${fmtMoney(r.real)}</td><td>${fmtMoney(r.pred)}</td><td>${fmtMoney(budget)}</td><td>${fmtMoney(r.abs)}</td><td>${r.rel.toFixed(2)}%</td><td>${fmtMoney(bAbs)}</td><td>${bRel.toFixed(2)}%</td></tr>`;
     }).join('');
@@ -744,7 +745,7 @@ async function runGrid(){
 
   const cutoffIdx=+cutoffEl.value, mode=modeEl.value, phi=+phiEl.value, fitSeries=parsed.slice(0,cutoffIdx+1), monthsAfterCutoff=Math.max(1, parsed.length-cutoffIdx-1), validationMode=validationModeEl.value;
   const rollingMetric=rollingMetricEl.value;
-  const realMap={}; parsed.forEach(r=>realMap[r.date.toISOString().slice(0,7)] = r.value);
+  const realMap={}; parsed.forEach(r=>realMap[monthKeyLocal(r.date)] = r.value);
   gridRunning=true; gridBtn.disabled=true; progressBar.style.width='0%'; top5.innerHTML='';
   if(!gridResult.textContent.includes('limitation automatique')) gridResult.textContent=`Calcul en cours (${total} combinaisons)...`;
 
@@ -767,8 +768,8 @@ async function runGrid(){
           diagnostic='rejeté: prévision négative';
         }
       } else {
-        const predMap={}; hw.fitted.forEach((v,i)=>{ if(v!=null) predMap[parsed[i].date.toISOString().slice(0,7)] = v; });
-        for(let h=1; h<=monthsAfterCutoff; h++) predMap[addMonths(parsed[cutoffIdx].date,h).toISOString().slice(0,7)] = hw.forecasts[h-1];
+        const predMap={}; hw.fitted.forEach((v,i)=>{ if(v!=null) predMap[monthKeyLocal(parsed[i].date)] = v; });
+        for(let h=1; h<=monthsAfterCutoff; h++) predMap[monthKeyLocal(addMonths(parsed[cutoffIdx].date,h))] = hw.forecasts[h-1];
         if(hw.forecasts.some(v=>!Number.isFinite(v)||v<0)){
           diagnostic='rejeté: prévision négative';
         } else {
