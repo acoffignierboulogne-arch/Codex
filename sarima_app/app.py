@@ -53,6 +53,7 @@ from streamlit.runtime.scriptrunner import get_script_run_ctx
 from data_loader import load_csv
 from evaluation import aggregate_by_period, annual_comparison
 from models import SarimaForecaster
+from sarima_selection import SarimaSelectionConfig, select_sarima_params
 
 st.set_page_config(page_title="SARIMA Dépenses", layout="wide")
 if get_script_run_ctx() is None:
@@ -84,6 +85,13 @@ if pending_best is not None:
 @st.cache_data(show_spinner=False)
 def cached_load(uploaded_file):
     return load_csv(uploaded_file)
+
+
+@st.cache_data(show_spinner=False)
+def cached_sarima_selection(series_values: tuple, series_index: tuple):
+    s = pd.Series(series_values, index=pd.DatetimeIndex(series_index), name="value").asfreq("MS")
+    cfg = SarimaSelectionConfig()
+    return select_sarima_params(s, cfg)
 
 
 def fmt_euro(v: float) -> str:
@@ -401,6 +409,15 @@ with st.sidebar:
     horizon = st.slider("Horizon (mois)", 1, 36, 12)
     budget_mode = st.selectbox("Ventilation de la prévision annuelle", ["Historique", "Saisonnalité modèle"], index=0)
 
+# PATCHPOINT: SARIMA_SELECTION
+auto_selection = cached_sarima_selection(tuple(valid_series.values.tolist()), tuple(valid_series.index.tolist()))
+selection_target = st.sidebar.selectbox("Objectif sélection auto", ["annual", "monthly", "r12"], index=0)
+selected_best = (auto_selection.get("best") or {}).get(selection_target) or (auto_selection.get("best") or {}).get("annual")
+if selected_best:
+    p, d, q = selected_best["order"]
+    P, D, Q, _m = selected_best["seasonal_order"]
+    st.sidebar.caption(f"Auto-SARIMA ({selection_target}) : (p,d,q)=({p},{d},{q}) / (P,D,Q,12)=({P},{D},{Q},12)")
+
 train = series[series.index <= cutoff].dropna()
 post_real = series[series.index > cutoff].dropna()
 forecaster = SarimaForecaster(train)
@@ -584,6 +601,20 @@ if not budget_initial_df.empty:
 else:
     st.info("Aucune colonne budget primitif exploitable trouvée dans le CSV filtré.")
 
+
+st.markdown("<p class='title'>Sélection automatique SARIMA (rolling-origin)</p>", unsafe_allow_html=True)
+st.caption(auto_selection["ui_text"]["explain_monthly_vs_r12_vs_annual"])
+if not auto_selection["candidates_table"].empty:
+    st.dataframe(auto_selection["candidates_table"], use_container_width=True)
+    with st.expander("Diagnostics stationnarité et résidus"):
+        st.write(auto_selection["ui_text"]["explain_adf_kpss"])
+        st.dataframe(auto_selection["stationarity_tests"], use_container_width=True)
+        st.write(auto_selection["ui_text"]["explain_ljung_box"])
+        st.write(auto_selection["ui_text"]["explain_why_penalty"])
+        if auto_selection["logs"]:
+            st.code("\n".join(auto_selection["logs"][:30]))
+else:
+    st.warning("Sélection automatique indisponible: aucun candidat SARIMA valide.")
 
 st.markdown("<p class='title'>Grid Search SARIMA</p>", unsafe_allow_html=True)
 with st.expander("Configurer et lancer"):
