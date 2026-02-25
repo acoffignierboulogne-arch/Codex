@@ -90,6 +90,7 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="tab-performance">Performance annuelle</button>
     <button class="tab-btn" data-tab="tab-projection">Projection fin d'année</button>
+    <button class="tab-btn" data-tab="tab-diagnostics">Structure série & suggestions</button>
   </div>
 
   <div id="tab-performance" class="tab-content active">
@@ -119,6 +120,16 @@
       <h2>Projection annuelle (réel + prévision à partir du cutoff)</h2>
       <p class="muted">Pour chaque année, on cumule le réel déjà connu et la prévision HW sur les mois futurs inclus dans l'horizon.</p>
       <div class="table-wrap"><table id="projectionTable"></table></div><h3 style="margin-top:10px;">Comparatif prévision initiale / ajustée / modèle</h3><div class="table-wrap"><table id="budgetCompareTable"></table></div>
+    </div>
+  </div>
+
+  <div id="tab-diagnostics" class="tab-content">
+    <div class="card">
+      <h2>Diagnostics objectifs de série</h2>
+      <p class="muted">Indicateurs structurels (autocorrélations, tendance, saisonnalité, volatilité) pour guider le réglage des paramètres.</p>
+      <div class="table-wrap"><table id="seriesDiagTable"></table></div>
+      <h3 style="margin-top:10px;">Suggestion de paramétrage HW</h3>
+      <div id="paramGuide" class="muted"></div>
     </div>
   </div>
 </div>
@@ -624,6 +635,60 @@ function buildBudgetCompareTable(predMap, cutoffDate){
 }
 
 
+function autocorr(values, lag){
+  if(lag<=0 || values.length<=lag+2) return NaN;
+  const x=values;
+  const n=x.length;
+  const mean=x.reduce((a,b)=>a+b,0)/n;
+  let num=0, den=0;
+  for(let i=0;i<n;i++){
+    const di=x[i]-mean;
+    den += di*di;
+    if(i>=lag) num += di*(x[i-lag]-mean);
+  }
+  if(Math.abs(den)<1e-9) return NaN;
+  return num/den;
+}
+
+function buildSeriesDiagnostics(){
+  if(parsed.length<24){
+    seriesDiagTable.innerHTML='<tr><th>Indicateur</th><th>Valeur</th><th>Lecture</th></tr><tr><td colspan="3">Série trop courte (&lt;24 mois) pour diagnostic robuste.</td></tr>';
+    paramGuide.innerHTML="Ajoutez de l'historique pour obtenir une suggestion objective de paramètres.";
+    return;
+  }
+  const vals=parsed.map(r=>r.value);
+  const mean=vals.reduce((a,b)=>a+b,0)/vals.length;
+  const std=Math.sqrt(vals.reduce((a,b)=>a+Math.pow(b-mean,2),0)/vals.length);
+  const acf1=autocorr(vals,1), acf3=autocorr(vals,3), acf12=autocorr(vals,12);
+  const diff=vals.slice(1).map((v,i)=>v-vals[i]);
+  const vol=Math.sqrt(diff.reduce((a,b)=>a+b*b,0)/Math.max(1,diff.length));
+  const seasonalShare=Math.abs(acf12);
+  const trendShare=Math.abs(acf1)-Math.abs(acf12);
+
+  const rows=[
+    ['ACF lag 1', Number.isFinite(acf1)?acf1.toFixed(3):'n/a', 'Mémoire court terme (niveau/tendance).'],
+    ['ACF lag 3', Number.isFinite(acf3)?acf3.toFixed(3):'n/a', 'Persistance intra-trimestre.'],
+    ['ACF lag 12', Number.isFinite(acf12)?acf12.toFixed(3):'n/a', 'Force saisonnalité annuelle.'],
+    ['Volatilité des variations (σ Δm)', fmtMoney(vol), 'Variabilité mois à mois.'],
+    ['Niveau moyen', fmtMoney(mean), 'Échelle moyenne de la série.'],
+    ['Coefficient de variation', (std/Math.max(Math.abs(mean),1e-9)*100).toFixed(2)+'%', 'Stabilité relative de la série.'],
+  ];
+  seriesDiagTable.innerHTML='<tr><th>Indicateur</th><th>Valeur</th><th>Lecture</th></tr>'+rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+
+  const alphaRec = Math.abs(acf1)>0.55 ? '0.3–0.6' : '0.1–0.3';
+  const betaRec = trendShare>0.2 ? '0.2–0.5' : '0.05–0.2';
+  const gammaRec = seasonalShare>0.35 ? '0.3–0.7' : '0.05–0.25';
+  const phiRec = trendShare>0.2 ? '0.90–0.98' : '0.96–1.00';
+  paramGuide.innerHTML = `
+  - <b>Lecture métier:</b> ACF(12) élevé ⇒ saisonnalité marquée ; ACF(1) élevé ⇒ inertie de court terme.<br>
+  - <b>Suggestion α</b>: <b>${alphaRec}</b> (réactivité au niveau).<br>
+  - <b>Suggestion β</b>: <b>${betaRec}</b> (importance de la tendance).<br>
+  - <b>Suggestion γ</b>: <b>${gammaRec}</b> (poids de la saisonnalité).<br>
+  - <b>Suggestion φ</b>: <b>${phiRec}</b> (amortissement de tendance).<br>
+  - Règle pratique: valider ensuite avec le grid rolling sur 2-3 bandes proches, puis retenir le modèle le plus stable annuellement.
+  `;
+}
+
 function buildHwInsights(){
   if(parsed.length<24){ hwInsights.textContent='Pas assez de données pour analyser le niveau/tendance/saisonnalité.'; return; }
   const vals=parsed.map(r=>r.value);
@@ -725,6 +790,7 @@ function recompute(){
   buildProjectionTable(cutoffIdx, hw.forecasts);
   buildBudgetCompareTable(predMap, parsed[cutoffIdx].date);
   buildHwInsights();
+  buildSeriesDiagnostics();
 }
 
 async function runGrid(){
@@ -827,6 +893,7 @@ const cutoffEl=document.getElementById('cutoff'), cutoffText=document.getElement
 const modeEl=document.getElementById('mode'), aggregationEl=document.getElementById('aggregation'), cumulModeEl=document.getElementById('cumulMode'), validationModeEl=document.getElementById('validationMode'), rollingMetricEl=document.getElementById('rollingMetric');
 const gridBtn=document.getElementById('gridBtn'), applyBest=document.getElementById('applyBest');
 const perfTable=document.getElementById('perfTable'), projectionTable=document.getElementById('projectionTable'), budgetCompareTable=document.getElementById('budgetCompareTable'), hwInsights=document.getElementById('hwInsights');
+const seriesDiagTable=document.getElementById('seriesDiagTable'), paramGuide=document.getElementById('paramGuide');
 const yearFocusEl=document.getElementById('yearFocus');
 
 function updateYearFocus(){

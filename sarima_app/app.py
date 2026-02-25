@@ -608,8 +608,10 @@ else:
 st.markdown("<p class='title'>Sélection automatique SARIMA (rolling-origin)</p>", unsafe_allow_html=True)
 st.caption(auto_selection["ui_text"]["explain_monthly_vs_r12_vs_annual"])
 if not auto_selection["candidates_table"].empty:
-    st.dataframe(auto_selection["candidates_table"], use_container_width=True)
-    with st.expander("Diagnostics stationnarité, features série et résidus"):
+    tab_sel, tab_diag = st.tabs(["Classement des modèles", "Structure série & guide paramétrage"])
+    with tab_sel:
+        st.dataframe(auto_selection["candidates_table"], use_container_width=True)
+    with tab_diag:
         st.write(auto_selection["ui_text"]["explain_adf_kpss"])
         st.dataframe(auto_selection["stationarity_tests"], use_container_width=True)
         st.write("Guide paramètres SARIMA")
