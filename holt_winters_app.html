@@ -427,7 +427,9 @@ function rollingOriginBacktestMetrics(series, params, maxOrigins=36){
     if(fcHorizon<1) continue;
     const fit=fitHoltWinters(train,alpha,beta,gamma,phi,mode,horizon);
     if(!fit) continue;
-    if(fit.forecasts.some(v=>!Number.isFinite(v) || v<0)){
+    const hasNegFit = fit.fitted.some(v=>v!=null && (!Number.isFinite(v) || v<0));
+    const hasNegFc = fit.forecasts.some(v=>!Number.isFinite(v) || v<0);
+    if(hasNegFit || hasNegFc){
       return {folds, hasNegativeForecast:true, monthlyByH, monthlyAll, r12All, annualAll, annualByMonth};
     }
 
@@ -811,6 +813,7 @@ async function runGrid(){
 
   const cutoffIdx=+cutoffEl.value, mode=modeEl.value, phi=+phiEl.value, fitSeries=parsed.slice(0,cutoffIdx+1), monthsAfterCutoff=Math.max(1, parsed.length-cutoffIdx-1), validationMode=validationModeEl.value;
   const rollingMetric=rollingMetricEl.value;
+  const validationHorizon=Math.max(12, monthsAfterCutoff, +horizonEl.value || 12);
   const realMap={}; parsed.forEach(r=>realMap[monthKeyLocal(r.date)] = r.value);
   gridRunning=true; gridBtn.disabled=true; progressBar.style.width='0%'; top5.innerHTML='';
   if(!gridResult.textContent.includes('limitation automatique')) gridResult.textContent=`Calcul en cours (${total} combinaisons)...`;
@@ -818,10 +821,14 @@ async function runGrid(){
   const top=[]; let done=0;
   for(const cmb of combos){
     const {a,b,g}=cmb;
-    const hw=fitHoltWinters(fitSeries,a,b,g,phi,mode,monthsAfterCutoff);
+    const hw=fitHoltWinters(fitSeries,a,b,g,phi,mode,validationHorizon);
     if(hw){
+      const hasNegFitted = hw.fitted.some(v=>v!=null && (!Number.isFinite(v) || v<0));
+      const hasNegForecast = hw.forecasts.some(v=>!Number.isFinite(v)||v<0);
       let score=Infinity, scoreCount=0, diagnostic='';
-      if(validationMode==='rolling'){
+      if(hasNegFitted || hasNegForecast){
+        diagnostic='rejeté: valeurs négatives (fitted/forecast)';
+      } else if(validationMode==='rolling'){
         const bt=rollingOriginBacktestMetrics(parsed,{alpha:a,beta:b,gamma:g,phi,mode},24);
         if(!bt.hasNegativeForecast){
           const monthlySummary=summarizeMetricBucket(bt.monthlyAll);
@@ -836,14 +843,10 @@ async function runGrid(){
       } else {
         const predMap={}; hw.fitted.forEach((v,i)=>{ if(v!=null) predMap[monthKeyLocal(parsed[i].date)] = v; });
         for(let h=1; h<=monthsAfterCutoff; h++) predMap[monthKeyLocal(addMonths(parsed[cutoffIdx].date,h))] = hw.forecasts[h-1];
-        if(hw.forecasts.some(v=>!Number.isFinite(v)||v<0)){
-          diagnostic='rejeté: prévision négative';
-        } else {
-          const scoreYears=(cumulModeEl.value==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap)).filter(r=>checks.includes(String(r.year)));
-          score=scoreYears.length ? scoreYears.reduce((x,r)=>x+r.rel,0) : Infinity;
-          scoreCount=scoreYears.length;
-          diagnostic = `cutoff courant | années=${scoreYears.length}`;
-        }
+        const scoreYears=(cumulModeEl.value==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap)).filter(r=>checks.includes(String(r.year)));
+        score=scoreYears.length ? scoreYears.reduce((x,r)=>x+r.rel,0) : Infinity;
+        scoreCount=scoreYears.length;
+        diagnostic = `cutoff courant | années=${scoreYears.length}`;
       }
 
       const trainVals = fitSeries.map(x=>x.value);
