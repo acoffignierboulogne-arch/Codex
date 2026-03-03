@@ -156,7 +156,7 @@ function detectColumns(cols){
   const m={};
   cols.forEach(c=>{ const k=slug(c); m[k]=c; });
   return {
-    exercice:m.exercice, mois:m.mois, date:m.date,
+    exercice:m.exercice, mois:m.mois, date:m.date || m.date_depenses || m.datedepenses,
     titreDep:m.titre_depenses || m.titre_d_penses,
     titreRec:m.titre_recettes,
     chapitre:m.chapitre,
@@ -164,7 +164,7 @@ function detectColumns(cols){
     sous:m.sous_compte,
     sous6:m.sous_compte_classe_6 || m.sous_compte_classe6,
     libelle:m.libelle_du_type || m.libelle_type || m.libell_du_type,
-    dep:m.realise_depenses_cumul_realise_date_comptable || m.realis_depenses_cumul_realise_date_comptable,
+    dep:m.realise_depenses_cumul_realise_date_comptable || m.realis_depenses_cumul_realise_date_comptable || m.depenses || m.montant || m.valeur,
     rec:m.realise_recettes_cumul_realise_date_comptable || m.realis_recettes_cumul_realise_date_comptable,
     prevDep:m.prevision_depenses_prevision_cumulee || m.prevision_cumulee,
     prevRec:m.prevision_recettes_prevision_cumulee || m.prevision_cumulee,
@@ -198,7 +198,7 @@ function parseCSVRaw(text){
     const base={date:toMonthStart(date), chapitre:normalizeLabel(obj[map.chapitre]||'(vide)'), compte:normalizeLabel(obj[map.compte]||'(vide)'), sous:normalizeLabel(obj[map.sous]||'(vide)'), sous6:normalizeLabel(obj[map.sous6]||'(vide)'), libelle:normalizeLabel(obj[map.libelle]||'(vide)')};
     const depVal=parseAmount(obj[map.dep]); if(depVal!==null) rows.push({...base, flux:'Dépenses', titre:normalizeLabel(obj[map.titreDep]||'(vide)'), value:depVal, previsionCumulee:parseAmount(obj[map.prevDep]), budgetPrimitif:parseAmount(obj[map.bpDep])});
     const recVal=parseAmount(obj[map.rec]); if(recVal!==null) rows.push({...base, flux:'Recettes', titre:normalizeLabel(obj[map.titreRec]||'(vide)'), value:recVal, previsionCumulee:parseAmount(obj[map.prevRec]), budgetPrimitif:parseAmount(obj[map.bpRec])});
-    if(!map.dep && !map.rec && i===1){ const d=parseFrenchDate(vals[0]); const v=parseAmount(vals[1]); if(d&&v!==null) rows.push({date:toMonthStart(d), flux:'Dépenses', titre:'(global)', chapitre:'(global)', compte:'(global)', sous:'(global)', sous6:'(global)', libelle:'(global)', value:v, previsionCumulee:null, budgetPrimitif:null}); }
+    if(!map.dep && !map.rec){ const d=parseFrenchDate(vals[0]); const v=parseAmount(vals[1]); if(d&&v!==null) rows.push({date:toMonthStart(d), flux:'Dépenses', titre:'(global)', chapitre:'(global)', compte:'(global)', sous:'(global)', sous6:'(global)', libelle:'(global)', value:v, previsionCumulee:null, budgetPrimitif:null}); }
   }
   return rows;
 }

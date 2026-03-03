@@ -69,6 +69,8 @@ def _canonical_columns(raw: pd.DataFrame) -> pd.DataFrame:
         "exercice": "exercice",
         "mois": "mois",
         "date": "date",
+        "date_depenses": "date",
+        "datedepenses": "date",
         "titre_depenses": "titre_depenses",
         "titre_recettes": "titre_recettes",
         "chapitre": "chapitre",
@@ -83,6 +85,9 @@ def _canonical_columns(raw: pd.DataFrame) -> pd.DataFrame:
         "budget_primitif_depense": "budget_primitif_depense",
         "budget_primitif_recette": "budget_primitif_recette",
         "realise_depenses_cumul_realise_date_comptable": "montant_depenses",
+        "depenses": "montant_depenses",
+        "montant": "montant_depenses",
+        "valeur": "montant_depenses",
         "realise_recettes_cumul_realise_date_comptable": "montant_recettes",
         # variantes sans accents / espaces
         "realis_depenses_cumul_realise_date_comptable": "montant_depenses",
@@ -114,7 +119,10 @@ def _build_flat_dataset(raw: pd.DataFrame) -> pd.DataFrame:
     df = _canonical_columns(raw.copy())
 
     if "date" in df.columns:
-        dates = pd.to_datetime(df["date"], errors="coerce", dayfirst=True)
+        date_raw = df["date"].astype(str)
+        iso_ratio = date_raw.str.match(r"^\d{4}-\d{2}-\d{2}$", na=False).mean()
+        dayfirst = False if iso_ratio >= 0.5 else True
+        dates = pd.to_datetime(df["date"], errors="coerce", dayfirst=dayfirst)
         dates = pd.to_datetime(
             {"year": dates.dt.year, "month": dates.dt.month, "day": 1}, errors="coerce"
         )
