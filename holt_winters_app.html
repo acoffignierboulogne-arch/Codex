@@ -169,7 +169,9 @@ function detectColumns(cols){
     prevDep:m.prevision_depenses_prevision_cumulee || m.prevision_cumulee,
     prevRec:m.prevision_recettes_prevision_cumulee || m.prevision_cumulee,
     bpDep:m.budget_primitif_depense,
-    bpRec:m.budget_primitif_recette
+    bpRec:m.budget_primitif_recette,
+    montant:m.montant || m.value || m.valeur,
+    bpSimple:m.budget_primitif || m.budget_primitif_depense || m.budget_primitif_depense_annuel
   };
 }
 function splitCSVLine(line, sep){
@@ -194,11 +196,25 @@ function parseCSVRaw(text){
     let date=null;
     if(map.date && obj[map.date]!==undefined) date=parseFrenchDate(obj[map.date]);
     else if(map.exercice && map.mois) date=monthFromYearMonth(obj[map.exercice],obj[map.mois]);
+    // En format simple, la date peut être détectée directement depuis la 1ère colonne.
+    if(!date && !map.dep && !map.rec) date=parseFrenchDate(vals[0]);
     if(!date) continue;
     const base={date:toMonthStart(date), chapitre:normalizeLabel(obj[map.chapitre]||'(vide)'), compte:normalizeLabel(obj[map.compte]||'(vide)'), sous:normalizeLabel(obj[map.sous]||'(vide)'), sous6:normalizeLabel(obj[map.sous6]||'(vide)'), libelle:normalizeLabel(obj[map.libelle]||'(vide)')};
     const depVal=parseAmount(obj[map.dep]); if(depVal!==null) rows.push({...base, flux:'Dépenses', titre:normalizeLabel(obj[map.titreDep]||'(vide)'), value:depVal, previsionCumulee:parseAmount(obj[map.prevDep]), budgetPrimitif:parseAmount(obj[map.bpDep])});
     const recVal=parseAmount(obj[map.rec]); if(recVal!==null) rows.push({...base, flux:'Recettes', titre:normalizeLabel(obj[map.titreRec]||'(vide)'), value:recVal, previsionCumulee:parseAmount(obj[map.prevRec]), budgetPrimitif:parseAmount(obj[map.bpRec])});
-    if(!map.dep && !map.rec && i===1){ const d=parseFrenchDate(vals[0]); const v=parseAmount(vals[1]); if(d&&v!==null) rows.push({date:toMonthStart(d), flux:'Dépenses', titre:'(global)', chapitre:'(global)', compte:'(global)', sous:'(global)', sous6:'(global)', libelle:'(global)', value:v, previsionCumulee:null, budgetPrimitif:null}); }
+
+    // Format simple attendu: Date, Montant, (optionnel) Budget primitif
+    if(!map.dep && !map.rec){
+      const d = date || parseFrenchDate(obj[map.date] ?? vals[0]);
+      const v = parseAmount(obj[map.montant] ?? vals[1]);
+      const bp = parseAmount(obj[map.bpSimple] ?? vals[2]);
+      if(d && v!==null){
+        rows.push({
+          date:toMonthStart(d), flux:'Dépenses', titre:'(global)', chapitre:'(global)', compte:'(global)', sous:'(global)', sous6:'(global)', libelle:'(global)',
+          value:v, previsionCumulee:null, budgetPrimitif:bp
+        });
+      }
+    }
   }
   return rows;
 }
