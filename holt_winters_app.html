@@ -774,9 +774,18 @@ function buildHwInsights(cutoffIdx, cumulMode){
     ? `<br><span class="muted"><b>Décomposition niveau/tendance par tranche de 12 mois ${cumulMode==='civil'?'(année civile)':'(ancrée sur le mois du cutoff)'}</b></span><table><tr><th>Période</th><th>Fenêtre</th><th>Niveau moyen</th><th>Tendance moyenne / mois</th></tr>${trancheRows.map(r=>`<tr><td>${r.label}</td><td>${r.window}</td><td>${fmtMoney(r.mean)}</td><td>${fmtMoney(r.slope)}</td></tr>`).join('')}</table>`
     : '';
 
+  const oldWindow = old.length ? `${monthLabel(old[0].date)} → ${monthLabel(old[old.length-1].date)}` : 'n/a';
+  const curWindow = cur.length ? `${monthLabel(cur[0].date)} → ${monthLabel(cur[cur.length-1].date)}` : 'n/a';
+
   hwInsights.innerHTML=`
-  - Niveau moyen comparé sur 2 fenêtres de 12 mois: <b>${old.length?monthLabel(old[0].date):'n/a'} → ${old.length?monthLabel(old[old.length-1].date):'n/a'}</b> vs <b>${monthLabel(cur[0].date)} → ${monthLabel(cur[cur.length-1].date)}</b> : <b>${levelShift>=0?'+':''}${levelShift.toFixed(1)}%</b><br>
-  - Tendance (pente moyenne mensuelle sur 12 mois): ancien=<b>${fmtMoney(oldTrendMonthly)}</b>/mois, récent=<b>${fmtMoney(curTrendMonthly)}</b>/mois, variation=<b>${trendShift>=0?'+':''}${trendShift.toFixed(1)}%</b><br>
+  - Niveau moyen comparé sur 2 fenêtres de 12 mois :<br>
+  &nbsp;&nbsp;• Fenêtre ancienne (${oldWindow}) : <b>${fmtMoney(oldMean)}</b><br>
+  &nbsp;&nbsp;• Fenêtre récente (${curWindow}) : <b>${fmtMoney(curMean)}</b><br>
+  &nbsp;&nbsp;• Variation : <b>${levelShift>=0?'+':''}${levelShift.toFixed(1)}%</b><br>
+  - Tendance (pente moyenne mensuelle) :<br>
+  &nbsp;&nbsp;• Fenêtre ancienne (${oldWindow}) : <b>${fmtMoney(oldTrendMonthly)}</b>/mois<br>
+  &nbsp;&nbsp;• Fenêtre récente (${curWindow}) : <b>${fmtMoney(curTrendMonthly)}</b>/mois<br>
+  &nbsp;&nbsp;• Variation : <b>${trendShift>=0?'+':''}${trendShift.toFixed(1)}%</b><br>
   - Saisonnalité estimée : <b>${seasonalityRatio>0.35?'forte':seasonalityRatio>0.15?'modérée':'faible'}</b> (ratio=${seasonalityRatio.toFixed(2)})<br>
   - Interprétation: si niveau et pente récente montent, le budget initial sous-estime souvent le risque de dépassement en début d'année.
   ${trancheHtml}
