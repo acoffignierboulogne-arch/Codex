@@ -814,8 +814,15 @@ function recompute(){
   const preReal = parsed.map((r,i)=> i<=cutoffIdx ? r.value : null);
   const postReal = parsed.map((r,i)=> i>=cutoffIdx ? r.value : null);
   const pred = Array(parsed.length + horizon).fill(null), low = Array(parsed.length + horizon).fill(null), high = Array(parsed.length + horizon).fill(null), budgetInit=Array(parsed.length + horizon).fill(null);
+  const hwFittedSeries = Array(parsed.length + horizon).fill(null), hwForecastSeries = Array(parsed.length + horizon).fill(null);
 
-  for(let i=0;i<hw.fitted.length;i++) if(hw.fitted[i]!=null){ pred[i]=hw.fitted[i]; low[i]=Math.max(0, pred[i]*0.95); high[i]=pred[i]*1.05; }
+  for(let i=0;i<hw.fitted.length;i++) if(hw.fitted[i]!=null){
+    pred[i]=hw.fitted[i];
+    low[i]=Math.max(0, pred[i]*0.95);
+    high[i]=pred[i]*1.05;
+    if(i<=cutoffIdx) hwFittedSeries[i]=hw.fitted[i];
+  }
+  if(cutoffIdx<hw.fitted.length && hw.fitted[cutoffIdx]!=null) hwForecastSeries[cutoffIdx]=hw.fitted[cutoffIdx];
   const extLabels=[...labels];
   const extDates=[];
   for(let i=0;i<parsed.length+horizon;i++) extDates.push(i<parsed.length?parsed[i].date:addMonths(parsed[parsed.length-1].date,i-parsed.length+1));
@@ -823,6 +830,7 @@ function recompute(){
     const idx=cutoffIdx+h, d=addMonths(parsed[cutoffIdx].date,h), v=hw.forecasts[h-1];
     if(!extLabels[idx]) extLabels[idx]=monthLabel(d);
     pred[idx]=v; low[idx]=Math.max(0, v*0.95); high[idx]=v*1.05;
+    hwForecastSeries[idx]=v;
   }
 
   const budgetMaps = seasonalizedBudgetSeries(0.7);
@@ -830,6 +838,8 @@ function recompute(){
   const ag = aggregateSeries(extLabels, extDates, [...preReal,...Array(horizon).fill(null)], [...pred], [...low], [...high], agg);
   const budgetInitAg=aggregateSeries(extLabels, extDates, Array(extLabels.length).fill(null), [...budgetInit], [...low], [...high], agg);
   const postAg = aggregateSeries(extLabels, extDates, [...postReal,...Array(horizon).fill(null)], [...pred], [...low], [...high], agg);
+  const hwFittedAg = aggregateSeries(extLabels, extDates, Array(extLabels.length).fill(null), [...hwFittedSeries], [...low], [...high], agg);
+  const hwForecastAg = aggregateSeries(extLabels, extDates, Array(extLabels.length).fill(null), [...hwForecastSeries], [...low], [...high], agg);
   if (chart) chart.destroy();
   chart = new Chart(document.getElementById('chart'), {
     type:'line', data:{ labels:ag.labels, datasets:[
@@ -838,7 +848,8 @@ function recompute(){
       {label:'IC95% bas', data:ag.low, borderColor:'rgba(0,0,0,0)', pointRadius:0, fill:false},
       {label:'IC95%', data:ag.high, borderColor:'rgba(0,0,0,0)', backgroundColor:'rgba(120,120,120,.2)', pointRadius:0, fill:'-1'},
       {label:'Budget primitif saisonnalisé', data:budgetInitAg.pred, borderColor:'#5b4bc4', borderDash:[2,4], borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'},
-            {label:'Prévision HW', data:ag.pred, borderColor:'#f07a24', borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'}
+      {label:'HW ajusté (in-sample)', data:hwFittedAg.pred, borderColor:'#f07a24', borderDash:[6,4], borderWidth:2, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'},
+      {label:'Prévision HW', data:hwForecastAg.pred, borderColor:'#f07a24', borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'}
     ]},
     options:{ responsive:true, interaction:{mode:'index', intersect:false}, scales:{ y:{ ticks:{ callback:v=>frMoney.format(v) } } },
       plugins:{ legend:{position:'top'}, tooltip:{callbacks:{label:(ctx)=>`${ctx.dataset.label}: ${fmtMoney(ctx.raw)}`}},
