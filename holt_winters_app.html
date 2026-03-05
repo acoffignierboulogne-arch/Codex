@@ -848,8 +848,8 @@ function recompute(){
       {label:'IC95% bas', data:ag.low, borderColor:'rgba(0,0,0,0)', pointRadius:0, fill:false},
       {label:'IC95%', data:ag.high, borderColor:'rgba(0,0,0,0)', backgroundColor:'rgba(120,120,120,.2)', pointRadius:0, fill:'-1'},
       {label:'Budget primitif saisonnalisé', data:budgetInitAg.pred, borderColor:'#5b4bc4', borderDash:[2,4], borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'},
-      {label:'HW ajusté (in-sample)', data:hwFittedAg.pred, borderColor:'#f07a24', borderDash:[6,4], borderWidth:2, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'},
-      {label:'Prévision HW', data:hwForecastAg.pred, borderColor:'#f07a24', borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'}
+      {label:'HW ajusté (in-sample)', data:hwFittedAg.pred, borderColor:'#f07a24', borderWidth:3, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'},
+      {label:'Prévision HW', data:hwForecastAg.pred, borderColor:'#f07a24', borderDash:[6,4], borderWidth:2, pointRadius:0, tension:0.35, cubicInterpolationMode:'monotone'}
     ]},
     options:{ responsive:true, interaction:{mode:'index', intersect:false}, scales:{ y:{ ticks:{ callback:v=>frMoney.format(v) } } },
       plugins:{ legend:{position:'top'}, tooltip:{callbacks:{label:(ctx)=>`${ctx.dataset.label}: ${fmtMoney(ctx.raw)}`}},
