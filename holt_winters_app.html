@@ -416,7 +416,7 @@ function addMetricBucket(target, actual, pred){
 
 function makeMonthKey(d){ return monthKeyLocal(d); }
 
-function rollingOriginBacktestMetrics(series, params, maxOrigins=36){
+function rollingOriginBacktestMetrics(series, params, maxOrigins=8){
   const {alpha,beta,gamma,phi,mode}=params;
   const horizon=12;
   const minTrain=24;
@@ -670,7 +670,7 @@ function autocorr(values, lag){
 
 function buildSeriesDiagnostics(){
   if(parsed.length<24){
-    seriesDiagTable.innerHTML='<tr><th>Indicateur</th><th>Valeur</th><th>Lecture</th></tr><tr><td colspan="3">Série trop courte (&lt;24 mois) pour diagnostic robuste.</td></tr>';
+    seriesDiagTable.innerHTML='<tr><th>Indicateur</th><th>Formule / méthode</th><th>Valeur</th><th>Lecture</th></tr><tr><td colspan="4">Série trop courte (&lt;24 mois) pour diagnostic robuste.</td></tr>';
     paramGuide.innerHTML="Ajoutez de l'historique pour obtenir une suggestion objective de paramètres.";
     return;
   }
@@ -678,49 +678,46 @@ function buildSeriesDiagnostics(){
   const mean=vals.reduce((a,b)=>a+b,0)/vals.length;
   const std=Math.sqrt(vals.reduce((a,b)=>a+Math.pow(b-mean,2),0)/vals.length);
   const acf1=autocorr(vals,1), acf3=autocorr(vals,3), acf12=autocorr(vals,12);
-  const byMonth=Array.from({length:12},()=>[]);
-  parsed.forEach(r=>byMonth[r.date.getMonth()].push(r.value));
-  const mMeans=byMonth.map(a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:mean);
-  const mCenter=mMeans.reduce((x,y)=>x+y,0)/12;
-  const seasStd=Math.sqrt(mMeans.reduce((a,b)=>a+Math.pow(b-mCenter,2),0)/12);
-  const seasonalityRatio=seasStd/Math.max(std,1e-9);
   const diff=vals.slice(1).map((v,i)=>v-vals[i]);
   const vol=Math.sqrt(diff.reduce((a,b)=>a+b*b,0)/Math.max(1,diff.length));
-  const seasonalShare=(Math.abs(acf12)+Math.min(1,seasonalityRatio))/2;
-  const trendShare=Math.abs(acf1)-Math.abs(acf12);
-
-  const acfSeasonFlag = Number.isFinite(acf12) && Math.abs(acf12)>=0.45;
-  const ratioSeasonFlag = seasonalityRatio>=0.20;
-  const seasonConclusion = acfSeasonFlag && ratioSeasonFlag
-    ? 'Saisonnalité cohérente (ACF et profil mensuel alignés).'
-    : (acfSeasonFlag || ratioSeasonFlag)
-      ? 'Signal mixte: saisonnalité possible mais instable (rupture, tendance ou pics).'
-      : 'Saisonnalité faible: motif annuel peu répétitif.';
 
   const rows=[
-    ['ACF lag 1', Number.isFinite(acf1)?acf1.toFixed(3):'n/a', 'Corrélation mois→mois: >0.6 inertie forte, proche 0 série plus erratique, <0 alternance.'],
-    ['ACF lag 3', Number.isFinite(acf3)?acf3.toFixed(3):'n/a', 'Persistance intra-trimestre.'],
-    ['ACF lag 12', Number.isFinite(acf12)?acf12.toFixed(3):'n/a', 'Mémoire annuelle: >0.5 saisonnalité marquée (mêmes mois se répètent).'],
-    ['Coeff. saisonnalité (profil mensuel)', seasonalityRatio.toFixed(3), 'Part de variance expliquée par la forme Jan→Déc (moyennes par mois).'],
-    ['Lecture croisée ACF(12)+coeff', seasonConclusion, 'ACF détecte la répétition temporelle; le coefficient mesure l’amplitude du motif moyen.'],
-    ['Volatilité des variations (σ Δm)', fmtMoney(vol), 'Variabilité mois à mois.'],
-    ['Niveau moyen', fmtMoney(mean), 'Échelle moyenne de la série.'],
-    ['Coefficient de variation', (std/Math.max(Math.abs(mean),1e-9)*100).toFixed(2)+'%', 'Stabilité relative de la série.'],
+    ['ACF lag 1', 'ACF(k) = Σ(yₜ − ȳ)(yₜ₋ₖ − ȳ) / Σ(yₜ − ȳ)² — corrélation de la série avec elle-même décalée de 1 mois.', Number.isFinite(acf1)?acf1.toFixed(3):'n/a', 'Mesure l’inertie court terme. > 0.6 : le mois suivant ressemble fortement au mois courant (forte persistance). Proche de 0 : série erratique, chaque mois est peu lié au précédent. < 0 : alternance haut/bas.'],
+    ['ACF lag 3', 'Même formule avec k=3. Corrélation entre un mois et celui 3 mois avant.', Number.isFinite(acf3)?acf3.toFixed(3):'n/a', 'Persistance intra-trimestre. Si élevée, les niveaux de dépenses se maintiennent sur un trimestre entier.'],
+    ['ACF lag 12', 'Même formule avec k=12. Corrélation entre un mois et le même mois de l’année précédente.', Number.isFinite(acf12)?acf12.toFixed(3):'n/a', 'Indicateur clé de saisonnalité annuelle. > 0.5 : les mêmes mois se répètent d’année en année (profil saisonnier stable). < 0.3 : pas de mémoire annuelle claire, la saisonnalité est faible ou instable.'],
+    ['Volatilité Δm', 'σ(Δ) = √(Σ(yₜ − yₜ₋₁)² / (n−1)) — écart-type des variations mensuelles consécutives.', fmtMoney(vol), 'Amplitude typique d’un changement d’un mois à l’autre. Plus c’est élevé, plus la série est heurtée.'],
+    ['Niveau moyen', 'ȳ = Σyₜ / n', fmtMoney(mean), 'Échelle moyenne de la série. Sert de référence pour interpréter les autres métriques en valeur absolue.'],
+    ['Coefficient de variation', 'CV = σ / ȳ', (std/Math.max(Math.abs(mean),1e-9)*100).toFixed(2)+'%', 'Variabilité relative de la série par rapport à son niveau moyen.'],
   ];
-  seriesDiagTable.innerHTML='<tr><th>Indicateur</th><th>Valeur</th><th>Lecture</th></tr>'+rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+  seriesDiagTable.innerHTML='<tr><th>Indicateur</th><th>Formule / méthode</th><th>Valeur</th><th>Lecture</th></tr>'+rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join('');
 
-  const alphaRec = Math.abs(acf1)>0.55 ? '0.3–0.6' : '0.1–0.3';
-  const betaRec = trendShare>0.2 ? '0.2–0.5' : '0.05–0.2';
-  const gammaRec = seasonalShare>0.35 ? '0.3–0.7' : '0.05–0.25';
-  const phiRec = trendShare>0.2 ? '0.90–0.98' : '0.96–1.00';
   paramGuide.innerHTML = `
-  - <b>Lecture métier:</b> ACF(1) > 0.6 = inertie forte court terme ; ACF(12) > 0.5 = répétition annuelle ; coeff. saisonnalité élevé = amplitude saisonnière importante.<br>
-  - <b>Pourquoi parfois contradictoire ?</b> ACF(12) regarde la synchronisation des mois d'une année à l'autre, alors que le coefficient de saisonnalité regarde l'amplitude moyenne du profil Jan→Déc. On peut donc avoir une répétition régulière mais faible (ACF haut, coeff bas) ou des amplitudes fortes perturbées par des ruptures (ACF bas, coeff haut).<br>
-  - <b>Suggestion α</b>: <b>${alphaRec}</b> (réactivité au niveau).<br>
-  - <b>Suggestion β</b>: <b>${betaRec}</b> (importance de la tendance).<br>
-  - <b>Suggestion γ</b>: <b>${gammaRec}</b> (poids de la saisonnalité).<br>
-  - <b>Suggestion φ</b>: <b>${phiRec}</b> (amortissement de tendance).<br>
-  - Règle pratique: valider ensuite avec le grid rolling sur 2-3 bandes proches, puis retenir le modèle le plus stable annuellement.
+  <div style="background: #f8f9fb; border-left: 3px solid var(--accent); padding: 12px; border-radius: 6px; font-size: 0.88rem; line-height: 1.6; margin-top: 10px;">
+    <b>Détail du calcul : niveau et tendance Holt-Winters</b><br><br>
+    Le modèle Holt-Winters décompose la série en trois composantes mises à jour à chaque nouveau mois observé :<br><br>
+    <b>NIVEAU (Lₜ) — "Où en est la série ?"</b><br>
+    Formule (additif) : Lₜ = α × (yₜ − Sₜ₋₁₂) + (1 − α) × (Lₜ₋₁ + φ × Bₜ₋₁)<br>
+    Le niveau est un compromis entre :<br>
+    • L'observation courante désaisonnalisée : yₜ − Sₜ₋₁₂ (on retire l'effet saisonnier pour voir le "vrai" niveau)<br>
+    • L'extrapolation du pas précédent : Lₜ₋₁ + φ × Bₜ₋₁ (le niveau précédent prolongé par la tendance amortie)<br>
+    α contrôle le dosage : α = 0.8 → le modèle suit de près les observations récentes. α = 0.2 → il fait davantage confiance à sa trajectoire lissée.<br><br>
+    <b>TENDANCE (Bₜ) — "La série monte ou descend ?"</b><br>
+    Formule : Bₜ = β × (Lₜ − Lₜ₋₁) + (1 − β) × φ × Bₜ₋₁<br>
+    La tendance est un compromis entre :<br>
+    • Le dernier incrément observé du niveau : Lₜ − Lₜ₋₁<br>
+    • La tendance précédente amortie : φ × Bₜ₋₁<br>
+    β contrôle la réactivité : β élevé → la tendance réagit vite aux inflexions. β faible → elle reste inertielle.<br>
+    φ (phi) amortit la tendance en projection : φ = 1 → tendance constante projetée à l'infini. φ = 0.95 → la tendance s'atténue progressivement, ce qui évite les extrapolations linéaires irréalistes à long terme.<br><br>
+    <b>SAISONNALITÉ (Sₜ) — "Quel est le profil mensuel récurrent ?"</b><br>
+    Formule (additif) : Sₜ = γ × (yₜ − Lₜ) + (1 − γ) × Sₜ₋₁₂<br>
+    L'indice saisonnier du mois courant est un compromis entre :<br>
+    • L'écart résiduel observé : yₜ − Lₜ (ce qui reste après le niveau)<br>
+    • L'indice saisonnier du même mois l'année précédente : Sₜ₋₁₂<br>
+    γ contrôle l'adaptabilité : γ élevé → le profil saisonnier se recalibre vite si les mois changent de comportement.<br><br>
+    <b>PRÉVISION à horizon h :</b><br>
+    ŷₜ₊ₕ = (Lₜ + φ(1−φʰ)/(1−φ) × Bₜ) + Sₜ₊ₕ₋₁₂<br>
+    Le terme φ(1−φʰ)/(1−φ) est la somme amortie : il fait que la tendance contribue de moins en moins à mesure que l'horizon augmente (si φ &lt; 1).
+  </div>
   `;
 }
 
@@ -872,7 +869,8 @@ async function runGrid(){
 
   let combos=[];
   for(const a of as){ for(const b of bs){ for(const g of gs){ combos.push({a,b,g}); }}}
-  const HARD_CAP=240;
+  const isRolling = validationModeEl.value === 'rolling';
+  const HARD_CAP = isRolling ? 80 : 240;
   if(combos.length>HARD_CAP){
     combos=combos.slice(0,HARD_CAP);
     gridResult.textContent=`Grille volumineuse détectée: limitation automatique à ${HARD_CAP} combinaisons pour éviter le blocage navigateur.`;
@@ -886,72 +884,78 @@ async function runGrid(){
   gridRunning=true; gridBtn.disabled=true; progressBar.style.width='0%'; top5.innerHTML='';
   if(!gridResult.textContent.includes('limitation automatique')) gridResult.textContent=`Calcul en cours (${total} combinaisons)...`;
 
-  const top=[]; let done=0;
-  for(const cmb of combos){
-    const {a,b,g}=cmb;
-    const hw=fitHoltWinters(fitSeries,a,b,g,phi,mode,validationHorizon);
-    if(hw){
-      const hasNegFitted = hw.fitted.some(v=>v!=null && (!Number.isFinite(v) || v<0));
-      const hasNegForecast = hw.forecasts.some(v=>!Number.isFinite(v)||v<0);
-      let score=Infinity, scoreCount=0, diagnostic='';
-      if(hasNegFitted || hasNegForecast){
-        diagnostic='rejeté: valeurs négatives (fitted/forecast)';
-      } else if(validationMode==='rolling'){
-        const bt=rollingOriginBacktestMetrics(parsed,{alpha:a,beta:b,gamma:g,phi,mode},24);
-        if(!bt.hasNegativeForecast){
-          const monthlySummary=summarizeMetricBucket(bt.monthlyAll);
-          const r12Summary=summarizeMetricBucket(bt.r12All);
-          const annualSummary=summarizeMetricBucket(bt.annualAll);
-          scoreCount = rollingMetric==='monthly' ? monthlySummary.count : (rollingMetric==='r12' ? r12Summary.count : annualSummary.count);
-          score = rollingMetric==='monthly' ? monthlySummary.rmse : (rollingMetric==='r12' ? r12Summary.rmse : annualSummary.rmse);
-          diagnostic = `rolling ${rollingMetric} | folds=${bt.folds.length}`;
+  try {
+    const top=[]; let done=0;
+    const yieldEvery = isRolling ? 1 : 4;
+    for(const cmb of combos){
+      const {a,b,g}=cmb;
+      const hw=fitHoltWinters(fitSeries,a,b,g,phi,mode,validationHorizon);
+      if(hw){
+        const hasNegFitted = hw.fitted.some(v=>v!=null && (!Number.isFinite(v) || v<0));
+        const hasNegForecast = hw.forecasts.some(v=>!Number.isFinite(v)||v<0);
+        let score=Infinity, scoreCount=0, diagnostic='';
+        if(hasNegFitted || hasNegForecast){
+          diagnostic='rejeté: valeurs négatives (fitted/forecast)';
+        } else if(validationMode==='rolling'){
+          const bt=rollingOriginBacktestMetrics(parsed,{alpha:a,beta:b,gamma:g,phi,mode});
+          if(!bt.hasNegativeForecast){
+            const monthlySummary=summarizeMetricBucket(bt.monthlyAll);
+            const r12Summary=summarizeMetricBucket(bt.r12All);
+            const annualSummary=summarizeMetricBucket(bt.annualAll);
+            scoreCount = rollingMetric==='monthly' ? monthlySummary.count : (rollingMetric==='r12' ? r12Summary.count : annualSummary.count);
+            score = rollingMetric==='monthly' ? monthlySummary.rmse : (rollingMetric==='r12' ? r12Summary.rmse : annualSummary.rmse);
+            diagnostic = `rolling ${rollingMetric} | folds=${bt.folds.length}`;
+          } else {
+            diagnostic='rejeté: prévision négative';
+          }
         } else {
-          diagnostic='rejeté: prévision négative';
+          const predMap={}; hw.fitted.forEach((v,i)=>{ if(v!=null) predMap[monthKeyLocal(parsed[i].date)] = v; });
+          for(let h=1; h<=monthsAfterCutoff; h++) predMap[monthKeyLocal(addMonths(parsed[cutoffIdx].date,h))] = hw.forecasts[h-1];
+          const scoreYears=(cumulModeEl.value==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap)).filter(r=>checks.includes(String(r.year)));
+          score=scoreYears.length ? scoreYears.reduce((x,r)=>x+r.rel,0) : Infinity;
+          scoreCount=scoreYears.length;
+          diagnostic = `cutoff courant | années=${scoreYears.length}`;
         }
-      } else {
-        const predMap={}; hw.fitted.forEach((v,i)=>{ if(v!=null) predMap[monthKeyLocal(parsed[i].date)] = v; });
-        for(let h=1; h<=monthsAfterCutoff; h++) predMap[monthKeyLocal(addMonths(parsed[cutoffIdx].date,h))] = hw.forecasts[h-1];
-        const scoreYears=(cumulModeEl.value==='r12' ? computeR12(realMap,predMap,parsed[cutoffIdx].date) : computeAnnual(realMap,predMap)).filter(r=>checks.includes(String(r.year)));
-        score=scoreYears.length ? scoreYears.reduce((x,r)=>x+r.rel,0) : Infinity;
-        scoreCount=scoreYears.length;
-        diagnostic = `cutoff courant | années=${scoreYears.length}`;
-      }
 
-      const trainVals = fitSeries.map(x=>x.value);
-      const trainMean = trainVals.reduce((x,y)=>x+y,0)/Math.max(1,trainVals.length);
-      const maxForecast = Math.max(...hw.forecasts);
-      const minForecast = Math.min(...hw.forecasts);
-      const absurdScale = maxForecast > trainMean * 8 || minForecast < -Math.abs(trainMean) * 2;
-      if (Number.isFinite(score) && scoreCount>0 && !absurdScale) {
-        top.push({a,b,g,score,diagnostic});
-        top.sort((x,y)=>x.score-y.score);
-        if(top.length>5) top.pop();
+        const trainVals = fitSeries.map(x=>x.value);
+        const trainMean = trainVals.reduce((x,y)=>x+y,0)/Math.max(1,trainVals.length);
+        const maxForecast = Math.max(...hw.forecasts);
+        const minForecast = Math.min(...hw.forecasts);
+        const absurdScale = maxForecast > trainMean * 8 || minForecast < -Math.abs(trainMean) * 2;
+        if (Number.isFinite(score) && scoreCount>0 && !absurdScale) {
+          top.push({a,b,g,score,diagnostic});
+          top.sort((x,y)=>x.score-y.score);
+          if(top.length>5) top.pop();
+        }
       }
+      done++; progressBar.style.width=`${(100*done/total).toFixed(1)}%`;
+      if (done % yieldEvery === 0) await new Promise(r => setTimeout(r, 0));
     }
-    done++; progressBar.style.width=`${(100*done/total).toFixed(1)}%`;
-    if(done % 4 === 0) await new Promise(r=>setTimeout(r,0));
-  }
 
-  if (!top.length){ gridResult.textContent='Aucune combinaison valide (contraintes: non-négativité + stabilité).'; applyBest.disabled=true; }
-  else {
-    lastBest=top[0];
-    let annualByMonthTable='';
-    if(validationMode==='rolling'){
-      const btBest=rollingOriginBacktestMetrics(parsed,{alpha:lastBest.a,beta:lastBest.b,gamma:lastBest.g,phi,mode},24);
-      const monthRows = btBest.annualByMonth.map((bkt,idx)=>{
-        const s=summarizeMetricBucket(bkt);
-        if(!s.count) return '';
-        const rel = Number.isFinite(s.mape) ? `${s.mape.toFixed(2)}%` : `${s.smape.toFixed(2)}% (sMAPE)`;
-        return `<tr><td>${idx+1}</td><td>${s.count}</td><td>${fmtMoney(s.mae)}</td><td>${rel}</td></tr>`;
-      }).filter(Boolean).join('');
-      annualByMonthTable = monthRows ? `<br><span class="muted">Erreur total annuel par mois d'origine (best):</span><table><tr><th>Mois origine</th><th>n</th><th>MAE total annuel</th><th>Erreur relative</th></tr>${monthRows}</table>` : '';
+    if (!top.length){ gridResult.textContent='Aucune combinaison valide (contraintes: non-négativité + stabilité).'; applyBest.disabled=true; }
+    else {
+      lastBest=top[0];
+      let annualByMonthTable='';
+      if(validationMode==='rolling'){
+        const btBest=rollingOriginBacktestMetrics(parsed,{alpha:lastBest.a,beta:lastBest.b,gamma:lastBest.g,phi,mode});
+        const monthRows = btBest.annualByMonth.map((bkt,idx)=>{
+          const s=summarizeMetricBucket(bkt);
+          if(!s.count) return '';
+          const rel = Number.isFinite(s.mape) ? `${s.mape.toFixed(2)}%` : `${s.smape.toFixed(2)}% (sMAPE)`;
+          return `<tr><td>${idx+1}</td><td>${s.count}</td><td>${fmtMoney(s.mae)}</td><td>${rel}</td></tr>`;
+        }).filter(Boolean).join('');
+        annualByMonthTable = monthRows ? `<br><span class="muted">Erreur total annuel par mois d'origine (best):</span><table><tr><th>Mois origine</th><th>n</th><th>MAE total annuel</th><th>Erreur relative</th></tr>${monthRows}</table>` : '';
+      }
+      const scoreLabel = validationMode==='rolling' ? `score RMSE (${rollingMetric})` : 'score cumulé';
+      gridResult.innerHTML=`Meilleur: α=${lastBest.a}, β=${lastBest.b}, γ=${lastBest.g} | ${scoreLabel}=${lastBest.score.toFixed(3)}<br><span class="muted">${lastBest.diagnostic} | contrainte non-négativité active</span>${annualByMonthTable}`;
+      applyBest.disabled=false;
+      top5.innerHTML='<tr><th>Rang</th><th>α</th><th>β</th><th>γ</th><th>Score</th><th>Contexte</th></tr>'+top.map((r,i)=>`<tr><td>${i+1}</td><td>${r.a}</td><td>${r.b}</td><td>${r.g}</td><td>${r.score.toFixed(3)}</td><td>${r.diagnostic}</td></tr>`).join('');
     }
-    const scoreLabel = validationMode==='rolling' ? `score RMSE (${rollingMetric})` : 'score cumulé';
-    gridResult.innerHTML=`Meilleur: α=${lastBest.a}, β=${lastBest.b}, γ=${lastBest.g} | ${scoreLabel}=${lastBest.score.toFixed(3)}<br><span class="muted">${lastBest.diagnostic} | contrainte non-négativité active</span>${annualByMonthTable}`;
-    applyBest.disabled=false;
-    top5.innerHTML='<tr><th>Rang</th><th>α</th><th>β</th><th>γ</th><th>Score</th><th>Contexte</th></tr>'+top.map((r,i)=>`<tr><td>${i+1}</td><td>${r.a}</td><td>${r.b}</td><td>${r.g}</td><td>${r.score.toFixed(3)}</td><td>${r.diagnostic}</td></tr>`).join('');
+  } finally {
+    gridRunning = false;
+    gridBtn.disabled = parsed.length < 24;
+    progressBar.style.width = '100%';
   }
-  gridRunning=false; gridBtn.disabled=parsed.length<24;
 }
 
 const fileInput=document.getElementById('fileInput'), dropzone=document.getElementById('dropzone');
